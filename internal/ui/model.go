@@ -698,7 +698,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			playSound(m.soundKind)
 		}
 		if m.notifyOn {
-			ringBell()
+			systemNotify("hrdx", m.paneDisplayName(target)+" finished")
 		}
 		return m, nil
 

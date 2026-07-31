@@ -3,6 +3,7 @@ package ui
 import (
 	"embed"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -154,10 +155,24 @@ func soundFile(kind string) string {
 	return path
 }
 
-// ringBell writes BEL to the host terminal; terminals surface it as
-// their notification (badge, dock bounce, or sound, per user config).
-func ringBell() {
-	_, _ = os.Stdout.WriteString("\a")
+// systemNotify posts a real desktop notification: a macOS notification
+// banner via osascript, notify-send on Linux. The terminal bell is the
+// fallback so at least the terminal's own indicator fires.
+func systemNotify(title, message string) {
+	go func() {
+		if path, err := exec.LookPath("osascript"); err == nil {
+			script := fmt.Sprintf("display notification %q with title %q", message, title)
+			if exec.Command(path, "-e", script).Run() == nil {
+				return
+			}
+		}
+		if path, err := exec.LookPath("notify-send"); err == nil {
+			if exec.Command(path, title, message).Run() == nil {
+				return
+			}
+		}
+		_, _ = os.Stdout.WriteString("\a")
+	}()
 }
 
 // playSound plays the configured notification sound in the background

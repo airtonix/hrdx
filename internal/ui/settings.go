@@ -49,7 +49,7 @@ func (m Model) settingsRows() []settingsRow {
 			rows = append(rows, settingsRow{"  " + mark + kind, "sound:" + kind})
 		}
 		rows = append(rows, settingsRow{
-			check(m.notifyOn) + "system notification (bell to the terminal)", "notify",
+			check(m.notifyOn) + "system notification", "notify",
 		})
 		return rows
 	default: // agents
@@ -98,6 +98,9 @@ func (m *Model) toggleSettingsRow(row settingsRow) tea.Cmd {
 	if row.action == "notify" {
 		m.notifyOn = !m.notifyOn
 		m.persist()
+		if m.notifyOn {
+			systemNotify("hrdx", "notifications enabled")
+		}
 	}
 	return nil
 }
