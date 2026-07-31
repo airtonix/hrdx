@@ -160,7 +160,13 @@ type Model struct {
 	updateInfo    update.Info      // populated async; Available drives the notice
 	events        *api.Broadcaster // API event fan-out, nil-safe
 	holder        *holder.Client   // session holder connection, nil = local panes
+	blurredAt     time.Time        // when the terminal lost focus, for stale detection
 }
+
+// staleAfter is how long the terminal must have been unfocused before a
+// focus regain triggers the full repaint. System sleep exceeds this
+// easily; alt-tabbing between apps never does.
+const staleAfter = 30 * time.Second
 
 // SetHolder wires the session holder client; must be called before the
 // program runs. With a holder, pane processes live in the holder and
@@ -596,16 +602,21 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.FocusMsg:
-		// Regaining focus (e.g. after system sleep or a terminal-side
-		// redraw glitch) can leave stale artifacts: the renderer's line
-		// cache no longer matches what is really on screen. Repaint
-		// everything and re-push the layout sizes to the PTYs.
+		// Regaining focus after a long absence (system sleep, display
+		// reattach) can leave stale artifacts: the renderer's line cache
+		// no longer matches what is really on screen. Repaint everything
+		// then. Quick app switches skip the clear, which would otherwise
+		// flicker the whole UI on every alt-tab.
+		if m.blurredAt.IsZero() || time.Since(m.blurredAt) < staleAfter {
+			return m, nil
+		}
 		for _, currentSpace := range m.spaces {
 			m.resizePanes(currentSpace)
 		}
 		return m, tea.ClearScreen
 
 	case tea.BlurMsg:
+		m.blurredAt = time.Now()
 		return m, nil
 
 	case paneStartedMsg:
