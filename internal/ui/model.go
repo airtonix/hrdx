@@ -149,7 +149,8 @@ type Model struct {
 	disabled      map[string]bool // agent kinds switched off in settings
 	soundOn       bool            // play a sound when an agent finishes a turn
 	soundKind     string          // which sound: "ding" or a sounds.json entry
-	notifyOn      bool            // ring the terminal bell (system notification)
+	notifyOn      bool            // post a desktop notification on finish
+	themeName     string          // active color theme, "default" or a themes/ file
 	wasBusy       map[int]bool    // pane id -> spinner seen, for the finish sound
 	settingsTab   int             // active tab of the settings window
 	settingsIndex int             // selected row of the settings window
@@ -344,9 +345,15 @@ func New(config Config, paths []string, statePath string, saved state.State) Mod
 	model := Model{config: config, input: input, nextID: 1, statePath: statePath,
 		branches: map[string]branchInfo{}, disabled: map[string]bool{},
 		wasBusy: map[int]bool{}, soundOn: saved.Sound, status: harnessProblem,
-		soundKind: saved.SoundKind, notifyOn: saved.Notify}
+		soundKind: saved.SoundKind, notifyOn: saved.Notify, themeName: saved.Theme}
 	if statePath != "" {
-		if problem := loadSounds(filepath.Dir(statePath)); problem != "" {
+		for _, problem := range []string{
+			loadSounds(filepath.Dir(statePath)),
+			loadThemes(filepath.Dir(statePath)),
+		} {
+			if problem == "" {
+				continue
+			}
 			if model.status != "" {
 				model.status += "; "
 			}
@@ -356,6 +363,10 @@ func New(config Config, paths []string, statePath string, saved state.State) Mod
 	if !isSoundKind(model.soundKind) {
 		model.soundKind = defaultSoundKind
 	}
+	if !isThemeName(model.themeName) {
+		model.themeName = defaultThemeName
+	}
+	applyTheme(model.themeName)
 	for _, kind := range saved.DisabledAgents {
 		if isAgentKind(kind) {
 			model.disabled[kind] = true

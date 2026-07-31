@@ -17,7 +17,7 @@ type settingsRow struct {
 	action string // "toggle:<kind>", "sound", or "sound:<kind>"
 }
 
-var settingsTabNames = []string{"agents", "notification"}
+var settingsTabNames = []string{"agents", "notification", "theme"}
 
 func (m *Model) openSettings() {
 	m.mode = modeSettings
@@ -51,6 +51,16 @@ func (m Model) settingsRows() []settingsRow {
 		rows = append(rows, settingsRow{
 			check(m.notifyOn) + "system notification", "notify",
 		})
+		return rows
+	case 2: // theme
+		var rows []settingsRow
+		for _, name := range themeNames() {
+			mark := "( ) "
+			if m.themeName == name {
+				mark = "(•) "
+			}
+			rows = append(rows, settingsRow{mark + name, "theme:" + name})
+		}
 		return rows
 	default: // agents
 		installed := map[string]bool{}
@@ -86,6 +96,12 @@ func (m *Model) toggleSettingsRow(row settingsRow) tea.Cmd {
 		m.persist()
 		// Preview so the choice is audible immediately.
 		playSound(kind)
+		return nil
+	}
+	if name, ok := strings.CutPrefix(row.action, "theme:"); ok {
+		m.themeName = name
+		applyTheme(name)
+		m.persist()
 		return nil
 	}
 	if row.action == "sound" {

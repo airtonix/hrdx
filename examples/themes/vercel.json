@@ -1,0 +1,16 @@
+{
+  "name": "vercel",
+  "description": "Vercel-inspired hrdx theme: pink accent, blue alt, neutral grays for chrome.",
+  "colors": {
+    "accent": 204,
+    "alt": 75,
+    "muted": 247,
+    "faint": 238,
+    "good": 77,
+    "busy": 208,
+    "bad": 204,
+    "bar_bg": "#1a1a1a",
+    "bar_fg": 255,
+    "ink": 232
+  }
+}

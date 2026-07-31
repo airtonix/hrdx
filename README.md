@@ -8,7 +8,7 @@ hrdx is a experimental, minimal and lightweight terminal multiplexer built for t
 - **Everything in view.** The sidebar shows every workspace with its git branch and ahead/behind counts, every pane with a live status dot, and an agents list that jumps you straight to any running agent, including ones you started by hand inside a shell.
 - **Feels like your terminal.** Scrollback, mouse selection with clipboard copy, drag-to-resize splits, drag-to-reorder workspaces, right-click context menus, and kitty keyboard protocol pass-through so even exotic chords like ctrl+1 reach your agent.
 - **Picks up where you left off.** Quit and relaunch: shells and agents keep running in a lightweight session holder and reattach exactly where they were, running commands and all. Workspaces, tabs, splits, and ratios come back too, and if a session is truly gone, agents resume their latest conversation from their own session store.
-- **Yours to tune.** A settings window (`ctrl+b ,` or the gear in the sidebar) lets you switch individual agents on or off and pick a notification sound for finished turns, including your own audio files via a small JSON file. All persisted.
+- **Yours to tune.** A settings window (`ctrl+b ,` or the gear in the sidebar) lets you switch individual agents on or off, pick a notification sound for finished turns (including your own audio files), and change the color theme, with user themes as simple JSON files. All persisted. See [Themes](#themes).
 - **Bring your own agent.** Register any agent CLI as a custom harness via a small JSON file, including its own busy detection for the sidebar spinner and finish sound. It shows up in pickers, cycling, and settings like the built-ins. See [Custom harnesses](#custom-harnesses).
 - **Scriptable from outside.** A JSON socket API lets scripts and editors inspect workspaces and pane states, open projects, spawn panes, type into agents, wait for them to finish, read their screens, and subscribe to live events. See [Socket API](#socket-api).
 
@@ -144,6 +144,37 @@ Successful responses are `{"id": "...", "result": {...}}`; failures are `{"id": 
 After `events.subscribe` the connection stays open and hrdx pushes lines like `{"event": "pane.busy_changed", "data": {"pane_id": 3, "busy": false}}`. Events: `workspace.created`, `workspace.closed`, `pane.created`, `pane.closed`, and `pane.busy_changed`, so a script can react the moment an agent finishes instead of polling.
 
 Every request is answered by the TUI's own update loop, so the API always sees exactly what is on screen. `pane.wait` plus `pane.send_text` is enough to build simple agent pipelines: prompt an agent, wait until it is idle, read the screen, move on.
+
+## Themes
+
+hrdx themes are JSON files that override any subset of the built-in colors; missing values inherit the default look. Drop them into a `themes/` directory next to the state file (`~/Library/Application Support/hrdx/themes/` on macOS, `$XDG_CONFIG_HOME/hrdx/themes/` on Linux) and pick them in the settings window's theme section. The change applies immediately and persists.
+
+```json
+{
+  "name": "neon",
+  "description": "Pink accent, near-black bars.",
+  "colors": {
+    "accent": 201,
+    "bar_bg": "#101010"
+  }
+}
+```
+
+Values are ANSI 256 color numbers or `"#rrggbb"` strings.
+
+| Color | Used for |
+|---|---|
+| `accent` | Focused pane frames, highlights, logo, selected items |
+| `alt` | Prefix badge, behind-count in the sidebar |
+| `muted` | Secondary text, hints, idle pane names |
+| `faint` | Inactive pane borders, sidebar divider |
+| `good` | Running dots, input badge |
+| `busy` | Busy spinner |
+| `bad` | Errors, exited dots |
+| `bar_bg` / `bar_fg` | Header and footer bars |
+| `ink` | Text on accent backgrounds, tab bar strip |
+
+See `examples/themes/` for a full example.
 
 ## Notifications
 
