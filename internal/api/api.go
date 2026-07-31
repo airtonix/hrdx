@@ -1,0 +1,192 @@
+// Package api exposes an external control API on a unix domain socket
+// next to the state file. The protocol is newline-delimited JSON: one
+// request per line, answered by one response line with the same id.
+//
+//	{"id": "req_1", "method": "status", "params": {}}
+//	{"id": "req_1", "result": {...}}
+//	{"id": "req_2", "error": {"code": "not_found", "message": "..."}}
+//
+// Event subscriptions keep the connection open after the initial
+// response; later lines are pushed events.
+//
+// The server never touches UI state directly: every request is
+// forwarded into the TUI's update loop as a message and answered over a
+// reply channel, so the API sees the same single-threaded model the
+// keyboard does.
+package api
+
+import "sync"
+
+// Request is delivered to the TUI as a Bubble Tea message. Reply must
+// receive exactly one Reply; the channel is buffered so the UI never
+// blocks on a vanished client.
+type Request struct {
+	Method  string
+	Payload any
+	Reply   chan Reply
+}
+
+// Reply carries the answer for one Request. Code classifies errors
+// ("not_found", "invalid_params", ...); empty Err means success.
+type Reply struct {
+	Data any
+	Err  string
+	Code string
+}
+
+// Error codes used on the wire.
+const (
+	CodeError         = "error"
+	CodeNotFound      = "not_found"
+	CodeInvalidParams = "invalid_params"
+	CodeUnknownMethod = "unknown_method"
+	CodeTimeout       = "timeout"
+)
+
+// WorkspaceCreate opens a directory as a new workspace.
+type WorkspaceCreate struct {
+	Path  string `json:"path"`
+	Agent string `json:"agent,omitempty"` // agent kind or "shell"; empty: default agent
+}
+
+// WorkspaceRef targets a workspace by name or path.
+type WorkspaceRef struct {
+	Workspace string `json:"workspace"`
+}
+
+// PaneCreate adds a pane to a workspace.
+type PaneCreate struct {
+	Workspace string `json:"workspace,omitempty"` // name or path; empty: selected workspace
+	Kind      string `json:"kind,omitempty"`      // agent kind or "shell"; empty: default agent
+	Split     string `json:"split,omitempty"`     // "right" (default), "down", "tab"
+}
+
+// PaneRef targets a pane by id.
+type PaneRef struct {
+	Pane int `json:"pane_id"`
+}
+
+// PaneSendText types text into a pane.
+type PaneSendText struct {
+	Pane  int    `json:"pane_id"`
+	Text  string `json:"text"`
+	Enter bool   `json:"enter,omitempty"` // append a carriage return
+}
+
+// AgentWait blocks until a pane's agent reaches a state.
+type AgentWait struct {
+	Pane      int    `json:"pane_id"`
+	Until     string `json:"until"` // "idle" or "busy"
+	TimeoutMS int    `json:"timeout_ms,omitempty"`
+}
+
+// PaneStatus describes one pane in a status reply.
+type PaneStatus struct {
+	ID      int    `json:"pane_id"`
+	Name    string `json:"name"`
+	Kind    string `json:"kind"`
+	Running bool   `json:"running"`
+	Busy    bool   `json:"busy"`
+	Failure string `json:"failure,omitempty"`
+}
+
+// TabStatus describes one tab in a status reply.
+type TabStatus struct {
+	Name   string       `json:"name,omitempty"`
+	Active bool         `json:"active"`
+	Panes  []PaneStatus `json:"panes"`
+}
+
+// WorkspaceStatus describes one workspace in a status reply.
+type WorkspaceStatus struct {
+	Name     string      `json:"name"`
+	Path     string      `json:"path"`
+	Selected bool        `json:"selected"`
+	Branch   string      `json:"branch,omitempty"`
+	Tabs     []TabStatus `json:"tabs"`
+}
+
+// Status is the full state snapshot returned by the status method.
+type Status struct {
+	Type       string            `json:"type"`
+	Version    string            `json:"version"`
+	Workspaces []WorkspaceStatus `json:"workspaces"`
+}
+
+// Event is one pushed subscription event.
+type Event struct {
+	Event string `json:"event"`
+	Data  any    `json:"data,omitempty"`
+}
+
+// Event names.
+const (
+	EventWorkspaceCreated = "workspace.created"
+	EventWorkspaceClosed  = "workspace.closed"
+	EventPaneCreated      = "pane.created"
+	EventPaneClosed       = "pane.closed"
+	EventPaneBusyChanged  = "pane.busy_changed"
+)
+
+// PaneEvent is the data of pane lifecycle and busy events.
+type PaneEvent struct {
+	Pane      int    `json:"pane_id"`
+	Name      string `json:"name,omitempty"`
+	Kind      string `json:"kind,omitempty"`
+	Workspace string `json:"workspace,omitempty"`
+	Busy      bool   `json:"busy,omitempty"`
+}
+
+// WorkspaceEvent is the data of workspace lifecycle events.
+type WorkspaceEvent struct {
+	Workspace string `json:"workspace"`
+	Path      string `json:"path,omitempty"`
+}
+
+// Broadcaster fans events out to subscribers. Publish never blocks:
+// slow subscribers drop events instead of stalling the UI.
+type Broadcaster struct {
+	mu   sync.Mutex
+	subs map[int]chan Event
+	next int
+}
+
+func NewBroadcaster() *Broadcaster {
+	return &Broadcaster{subs: map[int]chan Event{}}
+}
+
+// Subscribe registers a listener. The returned channel is buffered;
+// call Unsubscribe with the id when done.
+func (b *Broadcaster) Subscribe() (int, <-chan Event) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	id := b.next
+	b.next++
+	channel := make(chan Event, 64)
+	b.subs[id] = channel
+	return id, channel
+}
+
+func (b *Broadcaster) Unsubscribe(id int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if channel, ok := b.subs[id]; ok {
+		delete(b.subs, id)
+		close(channel)
+	}
+}
+
+// Publish delivers an event to every subscriber without blocking.
+func (b *Broadcaster) Publish(event Event) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, channel := range b.subs {
+		select {
+		case channel <- event:
+		default:
+		}
+	}
+}

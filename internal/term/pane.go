@@ -239,6 +239,32 @@ func (p *Pane) HasScreenText(needle string) bool {
 	return false
 }
 
+// PlainScreen returns the visible screen as unstyled text, one line per
+// row with trailing spaces trimmed.
+func (p *Pane) PlainScreen() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.vt.Lock()
+	defer p.vt.Unlock()
+	cols, rows := p.vt.Size()
+	var out bytes.Buffer
+	for y := 0; y < rows; y++ {
+		line := make([]rune, 0, cols)
+		for x := 0; x < cols; x++ {
+			line = append(line, glyphChar(p.vt.Cell(x, y).Char))
+		}
+		end := len(line)
+		for end > 0 && line[end-1] == ' ' {
+			end--
+		}
+		out.WriteString(string(line[:end]))
+		if y != rows-1 {
+			out.WriteByte('\n')
+		}
+	}
+	return out.String()
+}
+
 func (p *Pane) notify() {
 	select {
 	case p.updates <- struct{}{}:

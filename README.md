@@ -10,6 +10,7 @@ hrdx is a minimal and lightweight terminal multiplexer built for the agent era: 
 - **Picks up where you left off.** Workspaces, tabs, splits, and ratios survive restarts. Agent panes relaunch resuming their latest session for that project, automatically.
 - **Yours to tune.** A settings window (`ctrl+b ,` or the gear in the sidebar) lets you switch individual agents on or off and enable a notification sound when an agent finishes its turn. All persisted.
 - **Bring your own agent.** Register any agent CLI as a custom harness via a small JSON file, including its own busy detection for the sidebar spinner and finish sound. It shows up in pickers, cycling, and settings like the built-ins. See [Custom harnesses](#custom-harnesses).
+- **Scriptable from outside.** A JSON socket API lets scripts and editors inspect workspaces and pane states, open projects, spawn panes, type into agents, wait for them to finish, read their screens, and subscribe to live events. See [Socket API](#socket-api).
 
 ## Install
 
@@ -49,6 +50,7 @@ hrdx --agent claude
 | `--shell PATH` | Shell for shell panes (default `$SHELL`) |
 | `--state PATH` | State file for workspace persistence (empty disables) |
 | `--fresh` | Ignore saved workspaces and start clean |
+| `--api` | Serve the control API on a unix socket (default on, `--api=false` disables) |
 
 ## Keys
 
@@ -104,6 +106,43 @@ Any agent CLI beyond the built-ins can be registered by dropping a `harness.json
 | `resume` | Arguments that resume the latest session when a restored pane relaunches |
 | `resume_first` | Put the resume args before `args` (for subcommands like `resume --last`) |
 | `busy` | A substring visible on screen only while the harness is working; drives the busy spinner and the finish sound. Empty: braille spinner detection, like the built-ins |
+
+## Socket API
+
+While hrdx runs it serves a control API on a unix socket next to the state file (`hrdx.sock`), so scripts, editors, and coding agents can inspect and drive a running session. Disable with `--api=false`.
+
+The protocol is newline-delimited JSON: send one request per line, receive one response line with the same `id`.
+
+```sh
+SOCK="$HOME/Library/Application Support/hrdx/hrdx.sock"   # macOS
+# SOCK="$XDG_CONFIG_HOME/hrdx/hrdx.sock"                  # Linux
+
+echo '{"id": "1", "method": "status"}' | nc -U "$SOCK"
+echo '{"id": "2", "method": "workspace.create", "params": {"path": "~/Developer/api", "agent": "claude"}}' | nc -U "$SOCK"
+echo '{"id": "3", "method": "pane.create", "params": {"workspace": "api", "kind": "shell", "split": "down"}}' | nc -U "$SOCK"
+echo '{"id": "4", "method": "pane.send_text", "params": {"pane_id": 3, "text": "run the tests", "enter": true}}' | nc -U "$SOCK"
+echo '{"id": "5", "method": "pane.wait", "params": {"pane_id": 3, "until": "idle"}}' | nc -U "$SOCK"
+echo '{"id": "6", "method": "pane.read", "params": {"pane_id": 3}}' | nc -U "$SOCK"
+```
+
+| Method | Effect |
+|---|---|
+| `ping` | Liveness check, returns `pong` |
+| `status` | Workspaces, tabs, and panes with id, kind, running, and busy state |
+| `workspace.create` | Open a directory as a workspace (`path`, optional `agent`) |
+| `workspace.close` | Close a workspace by name or path |
+| `pane.create` | Add a pane (`workspace` name or path, `kind`, `split`: `right`, `down`, `tab`) |
+| `pane.send_text` | Type into a pane (`pane_id`, `text`, optional `enter`) |
+| `pane.read` | The pane's visible screen as plain text |
+| `pane.wait` | Block until a pane's agent is `idle` or `busy` (`until`, optional `timeout_ms`) |
+| `pane.close` | Close a pane by id |
+| `events.subscribe` | Keep the connection open and push events |
+
+Successful responses are `{"id": "...", "result": {...}}`; failures are `{"id": "...", "error": {"code": "not_found", "message": "..."}}` with codes `not_found`, `invalid_params`, `unknown_method`, `timeout`, and `error`.
+
+After `events.subscribe` the connection stays open and hrdx pushes lines like `{"event": "pane.busy_changed", "data": {"pane_id": 3, "busy": false}}`. Events: `workspace.created`, `workspace.closed`, `pane.created`, `pane.closed`, and `pane.busy_changed`, so a script can react the moment an agent finishes instead of polling.
+
+Every request is answered by the TUI's own update loop, so the API always sees exactly what is on screen. `pane.wait` plus `pane.send_text` is enough to build simple agent pipelines: prompt an agent, wait until it is idle, read the screen, move on.
 
 ## Persistence
 

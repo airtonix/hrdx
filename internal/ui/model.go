@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/patriceckhart/hrdx/internal/api"
 	"github.com/patriceckhart/hrdx/internal/state"
 	"github.com/patriceckhart/hrdx/internal/term"
 	"github.com/patriceckhart/hrdx/internal/update"
@@ -149,10 +150,17 @@ type Model struct {
 	completions   []string
 	completion    int
 	sideScroll    int
-	dragSpace     *space      // sidebar workspace being dragged for reordering
-	dragMoved     bool        // the drag moved rows: suppress persist-less release
-	hintScroll    int         // first visible hint in the ctrl+b footer row
-	updateInfo    update.Info // populated async; Available drives the notice
+	dragSpace     *space           // sidebar workspace being dragged for reordering
+	dragMoved     bool             // the drag moved rows: suppress persist-less release
+	hintScroll    int              // first visible hint in the ctrl+b footer row
+	updateInfo    update.Info      // populated async; Available drives the notice
+	events        *api.Broadcaster // API event fan-out, nil-safe
+}
+
+// SetEventBroadcaster wires the API event fan-out; must be called before
+// the program runs.
+func (m *Model) SetEventBroadcaster(events *api.Broadcaster) {
+	m.events = events
 }
 
 // menuItems returns the entries of the currently open context menu.
@@ -185,9 +193,14 @@ func (m *Model) flashStatus(text string) tea.Cmd {
 type soundConfirmMsg struct{ id int }
 
 // trackBusy watches one pane's busy state. On a busy -> idle transition it
-// schedules a debounced confirmation before playing the finish sound.
+// schedules a debounced confirmation before playing the finish sound and
+// notifies API subscribers of the state change.
 func (m *Model) trackBusy(target *pane) tea.Cmd {
 	if m.paneBusy(target) {
+		if !m.wasBusy[target.id] {
+			m.publish(api.Event{Event: api.EventPaneBusyChanged,
+				Data: api.PaneEvent{Pane: target.id, Name: target.name, Kind: target.kind, Busy: true}})
+		}
 		m.wasBusy[target.id] = true
 		return nil
 	}
@@ -195,6 +208,8 @@ func (m *Model) trackBusy(target *pane) tea.Cmd {
 		return nil
 	}
 	delete(m.wasBusy, target.id)
+	m.publish(api.Event{Event: api.EventPaneBusyChanged,
+		Data: api.PaneEvent{Pane: target.id, Name: target.name, Kind: target.kind, Busy: false}})
 	if !m.soundOn {
 		return nil
 	}
@@ -567,6 +582,9 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		return m.updateMouse(msg)
+
+	case api.Request:
+		return m, m.handleAPI(msg)
 	}
 
 	// Kitty CSI-u chords (ctrl+1, ...) arrive as unexported messages.
@@ -1843,6 +1861,7 @@ func (m Model) renderSidebar() string {
 		rows[list-1] = " " + stylePaneDim.Render("↓ more")
 	}
 	rows = append(rows, " "+stylePaneDim.Render("⚙ settings"), "")
+
 	return lipgloss.NewStyle().
 		Width(sidebarWidth).
 		Height(height).

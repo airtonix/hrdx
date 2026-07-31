@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/patriceckhart/hrdx/internal/api"
 	"github.com/patriceckhart/hrdx/internal/state"
 	"github.com/patriceckhart/hrdx/internal/ui"
 	"github.com/patriceckhart/hrdx/internal/update"
@@ -91,7 +92,7 @@ func main() {
 	var cwd paths
 	var agent, provider, model, reasoning, shell, statePath string
 	var zotBin, piBin, claudeBin, codexBin string
-	var resume, fresh bool
+	var resume, fresh, apiOn bool
 	flag.Var(&cwd, "cwd", "project directory to open as a workspace (repeatable)")
 	flag.StringVar(&agent, "agent", "zot", "default agent for new panes: zot, pi, claude, codex, or a custom harness kind")
 	flag.StringVar(&provider, "provider", "", "zot provider (zot panes only)")
@@ -105,6 +106,7 @@ func main() {
 	flag.StringVar(&statePath, "state", state.DefaultPath(), "state file for workspace persistence (empty disables)")
 	flag.BoolVar(&resume, "continue", false, "resume each agent's latest session")
 	flag.BoolVar(&fresh, "fresh", false, "ignore saved workspaces and start clean")
+	flag.BoolVar(&apiOn, "api", true, "serve the control API on a unix socket next to the state file")
 	flag.Parse()
 
 	saved := state.State{}
@@ -156,7 +158,22 @@ func main() {
 		config.CacheDir = filepath.Dir(statePath)
 	}
 	modelUI := ui.New(config, cwd, statePath, saved)
+	events := api.NewBroadcaster()
+	modelUI.SetEventBroadcaster(events)
 	program := tea.NewProgram(modelUI, tea.WithAltScreen(), tea.WithMouseCellMotion())
+
+	if apiOn && statePath != "" {
+		socket := filepath.Join(filepath.Dir(statePath), "hrdx.sock")
+		server, err := ui.StartAPIServer(socket, func(request api.Request) {
+			program.Send(request)
+		}, events)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "hrdx: api disabled:", err)
+		} else {
+			defer server.Close()
+		}
+	}
+
 	if _, err := program.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "hrdx:", err)
 		os.Exit(1)
