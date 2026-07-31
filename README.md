@@ -11,6 +11,23 @@ hrdx enables the kitty keyboard protocol in the host terminal, so modified chord
 - Go 1.25 or newer, macOS or Linux
 - at least one agent CLI installed and authenticated: `zot`, `pi`, `claude`, or `codex`
 
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/patriceckhart/hrdx/main/install.sh | bash
+```
+
+The installer detects OS and architecture, downloads the matching release archive, verifies its sha256 against the release checksums, and installs the binary into the first writable directory of `/usr/local/bin`, `~/.local/bin`, `~/bin`. Pin a version or prefix with `bash -s -- v0.0.1 ~/bin`.
+
+Update later with:
+
+```sh
+hrdx update           # download and install the newest release
+hrdx update --check   # show what update is available, install nothing
+```
+
+The TUI also checks for a newer release at startup (cached for 12 hours) and shows an `update x.y.z` badge in the header plus a hint in the footer when one is available.
+
 ## Run
 
 ```sh
@@ -109,6 +126,10 @@ Each pane owns one subprocess on a PTY. A reader goroutine feeds output into a v
 ## Current scope
 
 Panes are children of the TUI and stop when it exits; workspaces and agent sessions come back on relaunch via the state file and each agent's own session store. Detach and reattach with live processes and a server-owned runtime with a socket API are the natural next milestones.
+
+## Releases
+
+Every push to `main` that passes CI cuts a release automatically: the release workflow bumps the patch version (`v0.0.1`, `v0.0.2`, ... rolling over to `v0.1.0` after `.99`), tags it, and GoReleaser builds `linux`/`darwin` (`amd64` + `arm64`) archives with checksums onto a GitHub Release. Put `[release=skip]` in a commit message to skip the release for that push.
 
 ## Development
 

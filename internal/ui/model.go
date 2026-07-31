@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/patriceckhart/hrdx/internal/state"
 	"github.com/patriceckhart/hrdx/internal/term"
+	"github.com/patriceckhart/hrdx/internal/update"
 )
 
 func contains(values []string, wanted string) bool {
@@ -68,6 +69,8 @@ type Config struct {
 	AgentBins    map[string]string // per-agent binary overrides
 	ZotArgs      []string          // extra args passed to zot panes only
 	Shell        string
+	Version      string // current binary version for the update check
+	CacheDir     string // directory for the update check cache
 }
 
 type pane struct {
@@ -140,7 +143,8 @@ type Model struct {
 	completions []string
 	completion  int
 	sideScroll  int
-	hintScroll  int // first visible hint in the ctrl+b footer row
+	hintScroll  int         // first visible hint in the ctrl+b footer row
+	updateInfo  update.Info // populated async; Available drives the notice
 }
 
 // menuItems returns the entries of the currently open context menu.
@@ -313,8 +317,22 @@ func resolveDir(value string) (string, error) {
 	return path, nil
 }
 
+// updateInfoMsg delivers the async update check result.
+type updateInfoMsg struct{ info update.Info }
+
+func checkForUpdate(cacheDir, version string) tea.Cmd {
+	return func() tea.Msg {
+		info, ok := <-update.CheckAsync(cacheDir, version)
+		if !ok {
+			return updateInfoMsg{}
+		}
+		return updateInfoMsg{info: info}
+	}
+}
+
 func (m Model) Init() tea.Cmd {
 	var commands []tea.Cmd
+	commands = append(commands, checkForUpdate(m.config.CacheDir, m.config.Version))
 	for _, currentSpace := range m.spaces {
 		for _, currentTab := range currentSpace.tabs {
 			for _, currentPane := range currentTab.panes {
@@ -410,6 +428,10 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		for _, currentSpace := range m.spaces {
 			m.resizePanes(currentSpace)
 		}
+		return m, nil
+
+	case updateInfoMsg:
+		m.updateInfo = msg.info
 		return m, nil
 
 	case paneStartedMsg:
@@ -1578,8 +1600,11 @@ func (m Model) renderHeader() string {
 		}
 	}
 	right := ""
+	if m.updateInfo.Available {
+		right = styleBadgeInput.Render(" update "+m.updateInfo.Latest+" ") + styleBarMuted.Render(" ")
+	}
 	if currentSpace := m.currentSpace(); currentSpace != nil {
-		right = styleBarMuted.Render(shortenPath(currentSpace.cwd) + " ")
+		right += styleBarMuted.Render(shortenPath(currentSpace.cwd) + " ")
 	}
 	gap := m.width - lipgloss.Width(logo) - lipgloss.Width(title) - lipgloss.Width(right)
 	if gap < 0 {
@@ -1830,6 +1855,10 @@ func (m Model) renderFooter() string {
 	default:
 		badge = styleBadgeTerm.Render(" TERM ")
 		body = styleBarMuted.Render(" ctrl+b commands")
+		if m.updateInfo.Available {
+			body += styleBarText.Render("  update "+m.updateInfo.Current+" -> "+m.updateInfo.Latest) +
+				styleBarMuted.Render("  run 'hrdx update'")
+		}
 		if current := m.currentPane(); current != nil && current.term != nil {
 			if offset := current.term.ScrollOffset(); offset > 0 {
 				badge = styleBadgePrefix.Render(" SCROLL ")
