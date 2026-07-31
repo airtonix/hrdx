@@ -14,7 +14,7 @@ import (
 // settingsRow is one toggleable line of the active settings section.
 type settingsRow struct {
 	label  string
-	action string // "toggle:<kind>" or "sound"
+	action string // "toggle:<kind>", "sound", or "sound:<kind>"
 }
 
 var settingsTabNames = []string{"agents", "sound"}
@@ -36,7 +36,15 @@ func (m Model) settingsRows() []settingsRow {
 		if m.soundOn {
 			box = "[x] "
 		}
-		return []settingsRow{{box + "play a sound when an agent finishes", "sound"}}
+		rows := []settingsRow{{box + "play a sound when an agent finishes", "sound"}}
+		for _, kind := range soundKindList() {
+			mark := "( ) "
+			if m.soundKind == kind {
+				mark = "(•) "
+			}
+			rows = append(rows, settingsRow{"  " + mark + kind, "sound:" + kind})
+		}
+		return rows
 	default: // agents
 		installed := map[string]bool{}
 		for _, kind := range m.installedAgents() {
@@ -66,9 +74,19 @@ func (m *Model) toggleSettingsRow(row settingsRow) tea.Cmd {
 	if kind, ok := strings.CutPrefix(row.action, "toggle:"); ok {
 		return m.toggleAgent(kind)
 	}
+	if kind, ok := strings.CutPrefix(row.action, "sound:"); ok {
+		m.soundKind = kind
+		m.persist()
+		// Preview so the choice is audible immediately.
+		playSound(kind)
+		return nil
+	}
 	if row.action == "sound" {
 		m.soundOn = !m.soundOn
 		m.persist()
+		if m.soundOn {
+			playSound(m.soundKind)
+		}
 	}
 	return nil
 }

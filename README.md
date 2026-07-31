@@ -8,7 +8,7 @@ hrdx is a minimal and lightweight terminal multiplexer built for the agent era: 
 - **Everything in view.** The sidebar shows every workspace with its git branch and ahead/behind counts, every pane with a live status dot, and an agents list that jumps you straight to any running agent, including ones you started by hand inside a shell.
 - **Feels like your terminal.** Scrollback, mouse selection with clipboard copy, drag-to-resize splits, drag-to-reorder workspaces, right-click context menus, and kitty keyboard protocol pass-through so even exotic chords like ctrl+1 reach your agent.
 - **Picks up where you left off.** Quit and relaunch: shells and agents keep running in a lightweight session holder and reattach exactly where they were, running commands and all. Workspaces, tabs, splits, and ratios come back too, and if a session is truly gone, agents resume their latest conversation from their own session store.
-- **Yours to tune.** A settings window (`ctrl+b ,` or the gear in the sidebar) lets you switch individual agents on or off and enable a notification sound when an agent finishes its turn. All persisted.
+- **Yours to tune.** A settings window (`ctrl+b ,` or the gear in the sidebar) lets you switch individual agents on or off and pick a notification sound for finished turns, including your own audio files via a small JSON file. All persisted.
 - **Bring your own agent.** Register any agent CLI as a custom harness via a small JSON file, including its own busy detection for the sidebar spinner and finish sound. It shows up in pickers, cycling, and settings like the built-ins. See [Custom harnesses](#custom-harnesses).
 - **Scriptable from outside.** A JSON socket API lets scripts and editors inspect workspaces and pane states, open projects, spawn panes, type into agents, wait for them to finish, read their screens, and subscribe to live events. See [Socket API](#socket-api).
 
@@ -144,6 +144,19 @@ Successful responses are `{"id": "...", "result": {...}}`; failures are `{"id": 
 After `events.subscribe` the connection stays open and hrdx pushes lines like `{"event": "pane.busy_changed", "data": {"pane_id": 3, "busy": false}}`. Events: `workspace.created`, `workspace.closed`, `pane.created`, `pane.closed`, and `pane.busy_changed`, so a script can react the moment an agent finishes instead of polling.
 
 Every request is answered by the TUI's own update loop, so the API always sees exactly what is on screen. `pane.wait` plus `pane.send_text` is enough to build simple agent pipelines: prompt an agent, wait until it is idle, read the screen, move on.
+
+## Custom sounds
+
+The finish notification ships with a built-in `ding` and the terminal `bell`. Add your own sounds with a `sounds.json` next to the state file; they appear in the settings window's sound section and are previewed when selected:
+
+```json
+[
+  { "name": "sheep", "file": "~/sounds/maehhh.wav" },
+  { "name": "gong", "file": "/Users/me/sounds/gong.aiff" }
+]
+```
+
+`name` is the label in settings (must not collide with built-ins), `file` any audio file your OS player understands (`afplay` on macOS, `paplay`/`aplay` on Linux). Missing files are reported in the footer and skipped.
 
 ## Persistence
 

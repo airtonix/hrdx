@@ -130,7 +130,7 @@ func TestSoundToggleRoundTrip(t *testing.T) {
 	}
 	model.settingsTab = 1
 	rows := model.settingsRows()
-	if len(rows) != 1 || rows[0].action != "sound" {
+	if len(rows) != 1+len(soundKindList()) || rows[0].action != "sound" {
 		t.Fatalf("sound rows = %+v", rows)
 	}
 	model.toggleSettingsRow(rows[0])
@@ -140,9 +140,24 @@ func TestSoundToggleRoundTrip(t *testing.T) {
 	if !model.snapshot().Sound {
 		t.Fatal("snapshot should carry the sound setting")
 	}
+
+	// Selecting a sound kind persists and restores.
+	model.toggleSettingsRow(settingsRow{action: "sound:bell"})
+	if model.soundKind != "bell" {
+		t.Fatalf("soundKind = %q, want bell", model.soundKind)
+	}
+	if model.snapshot().SoundKind != "bell" {
+		t.Fatal("snapshot should carry the sound kind")
+	}
 	restored := New(Config{Shell: "/bin/sh"}, nil, "", model.snapshot())
-	if !restored.soundOn {
-		t.Fatal("restore should keep sound on")
+	if !restored.soundOn || restored.soundKind != "bell" {
+		t.Fatalf("restore = %v/%q, want on/bell", restored.soundOn, restored.soundKind)
+	}
+
+	// Unknown kinds fall back to the default.
+	bad := New(Config{Shell: "/bin/sh"}, nil, "", state.State{SoundKind: "airhorn"})
+	if bad.soundKind != defaultSoundKind {
+		t.Fatalf("soundKind = %q, want default", bad.soundKind)
 	}
 }
 

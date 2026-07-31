@@ -3,7 +3,6 @@ package ui
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -149,6 +148,7 @@ type Model struct {
 	branches      map[string]branchInfo
 	disabled      map[string]bool // agent kinds switched off in settings
 	soundOn       bool            // play a sound when an agent finishes a turn
+	soundKind     string          // which sound: "ding", "sheep", "bell"
 	wasBusy       map[int]bool    // pane id -> spinner seen, for the finish sound
 	settingsTab   int             // active tab of the settings window
 	settingsIndex int             // selected row of the settings window
@@ -277,32 +277,6 @@ func (m *Model) trackBusy(target *pane) tea.Cmd {
 	return tea.Tick(1500*time.Millisecond, func(time.Time) tea.Msg { return soundConfirmMsg{id: id} })
 }
 
-// playFinishSound plays an audible notification. Terminals often map
-// the bell to a silent badge or attention bounce, so an OS sound player
-// is preferred: afplay with a system sound on macOS, the freedesktop
-// complete sound via canberra/pulse/alsa players on Linux. The terminal
-// bell is the last resort.
-func playFinishSound() {
-	go func() {
-		candidates := [][]string{
-			{"afplay", "/System/Library/Sounds/Glass.aiff"},
-			{"canberra-gtk-play", "-i", "complete"},
-			{"paplay", "/usr/share/sounds/freedesktop/stereo/complete.oga"},
-			{"aplay", "-q", "/usr/share/sounds/alsa/Front_Center.wav"},
-		}
-		for _, candidate := range candidates {
-			path, err := exec.LookPath(candidate[0])
-			if err != nil {
-				continue
-			}
-			if exec.Command(path, candidate[1:]...).Run() == nil {
-				return
-			}
-		}
-		_, _ = os.Stdout.WriteString("\a")
-	}()
-}
-
 // spinnerFrames matches zot's own braille spinner.
 var spinnerFrames = []string{"⠋", "⠙", "⠚", "⠞", "⠖", "⠦", "⠴", "⠲", "⠳", "⠓"}
 
@@ -368,7 +342,19 @@ func New(config Config, paths []string, statePath string, saved state.State) Mod
 
 	model := Model{config: config, input: input, nextID: 1, statePath: statePath,
 		branches: map[string]branchInfo{}, disabled: map[string]bool{},
-		wasBusy: map[int]bool{}, soundOn: saved.Sound, status: harnessProblem}
+		wasBusy: map[int]bool{}, soundOn: saved.Sound, status: harnessProblem,
+		soundKind: saved.SoundKind}
+	if statePath != "" {
+		if problem := loadSounds(filepath.Dir(statePath)); problem != "" {
+			if model.status != "" {
+				model.status += "; "
+			}
+			model.status += problem
+		}
+	}
+	if !isSoundKind(model.soundKind) {
+		model.soundKind = defaultSoundKind
+	}
 	for _, kind := range saved.DisabledAgents {
 		if isAgentKind(kind) {
 			model.disabled[kind] = true
@@ -708,7 +694,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.soundOn {
-			playFinishSound()
+			playSound(m.soundKind)
 		}
 		return m, nil
 
