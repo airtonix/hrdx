@@ -115,7 +115,7 @@ func (m *Model) toggleSettingsRow(row settingsRow) tea.Cmd {
 		m.notifyOn = !m.notifyOn
 		m.persist()
 		if m.notifyOn {
-			systemNotify("hrdx", "notifications enabled")
+			systemNotify()
 		}
 	}
 	return nil

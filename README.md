@@ -178,7 +178,7 @@ See `examples/themes/` for a full example.
 
 ## Notifications
 
-The notification section of the settings window has two independent toggles for finished agent turns: play a sound (built-in `ding` and `chime`, or your own audio files) and a system notification, a real desktop notification banner naming the pane that finished (macOS notification center, `notify-send` on Linux, terminal bell as last resort). Add custom sounds with a `sounds.json` next to the state file; they appear as choices and are previewed when selected:
+The notification section of the settings window has two independent toggles for finished agent turns: play a sound (built-in `ding` and `chime`, or your own audio files) and a system notification, which rings the terminal bell so your platform's native attention indicator fires: dock badge and bounce on macOS, the window manager's urgency hint on Linux. No notification daemon or permission required. Add custom sounds with a `sounds.json` next to the state file; they appear as choices and are previewed when selected:
 
 ```json
 [

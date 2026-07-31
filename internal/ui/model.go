@@ -709,7 +709,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			playSound(m.soundKind)
 		}
 		if m.notifyOn {
-			systemNotify("hrdx", m.paneDisplayName(target)+" finished")
+			systemNotify()
 		}
 		return m, nil
 
