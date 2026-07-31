@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/creack/pty"
@@ -26,7 +27,7 @@ type session struct {
 	cwd     string
 	ptmx    *os.File
 	cmd     *exec.Cmd
-	running bool
+	running atomic.Bool // written by pump on exit, read by handlers
 
 	mu     sync.Mutex
 	buffer *ring // detached output, replayed on attach
@@ -125,7 +126,7 @@ func (s *Server) serveClient(conn net.Conn) {
 			s.mu.Lock()
 			target := s.sessions[f.ID]
 			s.mu.Unlock()
-			if target != nil && target.running {
+			if target != nil && target.running.Load() {
 				_, _ = target.ptmx.Write(f.Payload)
 			}
 		case TCtrl:
@@ -163,7 +164,7 @@ func (s *Server) handle(req request) response {
 		if target == nil {
 			return response{Req: req.Req, Err: fmt.Sprintf("session %d not found", req.Session)}
 		}
-		if req.Cols > 1 && req.Rows > 1 && target.running {
+		if req.Cols > 1 && req.Rows > 1 && target.running.Load() {
 			_ = pty.Setsize(target.ptmx, &pty.Winsize{Cols: uint16(req.Cols), Rows: uint16(req.Rows)})
 		}
 		// Replay buffered output so the client can rebuild the screen.
@@ -174,14 +175,14 @@ func (s *Server) handle(req request) response {
 		if len(replay) > 0 {
 			s.sendToClient(frame{Type: TOut, ID: target.id, Payload: replay})
 		}
-		return response{Req: req.Req, Session: target.id, Running: target.running}
+		return response{Req: req.Req, Session: target.id, Running: target.running.Load()}
 
 	case "resize":
 		target := s.session(req.Session)
 		if target == nil {
 			return response{Req: req.Req, Err: fmt.Sprintf("session %d not found", req.Session)}
 		}
-		if target.running && req.Cols > 1 && req.Rows > 1 {
+		if target.running.Load() && req.Cols > 1 && req.Rows > 1 {
 			_ = pty.Setsize(target.ptmx, &pty.Winsize{Cols: uint16(req.Cols), Rows: uint16(req.Rows)})
 		}
 		return response{Req: req.Req}
@@ -207,7 +208,7 @@ func (s *Server) handle(req request) response {
 		list := make([]SessionInfo, 0, len(s.sessions))
 		for _, current := range s.sessions {
 			list = append(list, SessionInfo{
-				ID: current.id, Command: current.command, CWD: current.cwd, Running: current.running,
+				ID: current.id, Command: current.command, CWD: current.cwd, Running: current.running.Load(),
 			})
 		}
 		return response{Req: req.Req, Sessions: list}
@@ -241,9 +242,9 @@ func (s *Server) start(req request) (int64, error) {
 		cwd:     req.CWD,
 		ptmx:    ptmx,
 		cmd:     cmd,
-		running: true,
 		buffer:  newRing(ringCapacity),
 	}
+	target.running.Store(true)
 	s.sessions[id] = target
 	s.mu.Unlock()
 
@@ -271,9 +272,7 @@ func (s *Server) pump(target *session) {
 		}
 	}
 	_ = target.cmd.Wait()
-	s.mu.Lock()
-	target.running = false
-	s.mu.Unlock()
+	target.running.Store(false)
 	s.sendToClient(frame{Type: TEvt, Payload: marshal(event{Event: "exited", Session: target.id})})
 }
 
@@ -306,10 +305,7 @@ func (s *Server) session(id int64) *session {
 }
 
 func (s *Server) kill(target *session) {
-	s.mu.Lock()
-	running := target.running
-	s.mu.Unlock()
-	if running && target.cmd.Process != nil {
+	if target.running.Load() && target.cmd.Process != nil {
 		_ = target.cmd.Process.Kill()
 	}
 	_ = target.ptmx.Close()
@@ -334,11 +330,11 @@ func (s *Server) shutdown() {
 
 // foreground resolves the session's foreground process name, cached.
 func (t *session) foreground() string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if !t.running {
+	if !t.running.Load() {
 		return ""
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if time.Since(t.fgCheckedAt) < 2*time.Second {
 		return t.fgName
 	}
