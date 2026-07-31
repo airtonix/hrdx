@@ -83,6 +83,52 @@ All keys go to the focused terminal, except the `ctrl+b` prefix (tmux style):
 
 Everything is clickable: tabs, workspaces, panes, agents, menus, and the settings entry at the bottom of the sidebar. Drag workspaces to reorder them, drag pane borders to resize, right-click for context menus, and drag with the left button to select text (copied straight to your clipboard). Wheel events go to the pane under the cursor: agent TUIs scroll themselves, shells scroll their local history, and `shift+pgup` / `shift+pgdn` do the same from the keyboard.
 
+## Remote and container panes
+
+Every pane is a real PTY, so a shell pane can connect to a remote host, Docker container, or Kubernetes workload. For an interactive shell:
+
+```sh
+ssh user@host
+docker exec -it -w /workspace container-name sh
+kubectl exec -it -n namespace deploy/app -- sh
+```
+
+An agent installed at the target can be launched directly instead:
+
+```sh
+ssh -tt user@host 'cd /path/to/project && exec codex'
+docker exec -it -w /workspace container-name codex
+kubectl exec -it -n namespace deploy/app -- codex
+```
+
+Use the same pattern for any supported or custom agent. Authentication and the agent executable, configuration, credentials, and project files must be available at the target.
+
+To make remote and container agents appear in pickers, agent cycling, settings, and the sidebar, register their client command as a custom harness:
+
+```json
+[
+  {
+    "kind": "remote-codex",
+    "binary": "ssh",
+    "args": ["-tt", "user@host", "cd /path/to/project && exec codex"]
+  },
+  {
+    "kind": "docker-codex",
+    "binary": "docker",
+    "args": ["exec", "-it", "-w", "/workspace", "container-name", "codex"]
+  },
+  {
+    "kind": "k8s-codex",
+    "binary": "kubectl",
+    "args": ["exec", "-it", "-n", "namespace", "deploy/app", "--", "codex"]
+  }
+]
+```
+
+Wrapper scripts are useful when the host, container, namespace, pod, working directory, or authentication setup is dynamic. Set the harness `binary` to the wrapper path and put any fixed parameters in `args`.
+
+The session holder keeps the local SSH, Docker, or Kubernetes client process alive when hrdx restarts. It cannot keep an agent alive when its remote host, container, pod, or network connection ends, and it does not automatically reconnect. Workspace Git details are read from the local workspace path, not from the remote filesystem.
+
 ## Custom harnesses
 
 Any agent CLI beyond the built-ins can be registered by dropping a `harness.json` next to the state file (`~/Library/Application Support/hrdx/` on macOS, `$XDG_CONFIG_HOME/hrdx/` on Linux). Registered harnesses appear everywhere the built-ins do: in the pickers, in agent cycling, in the sidebar agents list, and in the settings window for enabling and disabling.
