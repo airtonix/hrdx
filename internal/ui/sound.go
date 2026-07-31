@@ -12,16 +12,17 @@ import (
 
 // Embedded notification sounds. The files are bundled into the binary;
 // on first play they are written to the state directory so external
-// players can read them.
+// players can read them. Both are synthesized in-repo (no third-party
+// audio): ding is a short bell strike, chime a softer two-tone.
 //
-//go:embed sounds/ding.wav
+//go:embed sounds/ding.wav sounds/chime.wav
 var soundFiles embed.FS
 
 // soundsFile declares custom notification sounds in the state directory.
 const soundsFile = "sounds.json"
 
-// builtinSounds are always available; "ding" is embedded in the binary.
-var builtinSounds = []string{"ding"}
+// builtinSounds are always available, embedded in the binary.
+var builtinSounds = []string{"ding", "chime"}
 
 const defaultSoundKind = "ding"
 

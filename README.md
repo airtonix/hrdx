@@ -147,7 +147,7 @@ Every request is answered by the TUI's own update loop, so the API always sees e
 
 ## Notifications
 
-The notification section of the settings window has two independent toggles for finished agent turns: play a sound (built-in `ding`, or your own audio files) and a system notification, which rings the terminal bell so your terminal surfaces its own indicator (badge, dock bounce, or sound, per its config). Add custom sounds with a `sounds.json` next to the state file; they appear as choices and are previewed when selected:
+The notification section of the settings window has two independent toggles for finished agent turns: play a sound (built-in `ding` and `chime`, or your own audio files) and a system notification, which rings the terminal bell so your terminal surfaces its own indicator (badge, dock bounce, or sound, per its config). Add custom sounds with a `sounds.json` next to the state file; they appear as choices and are previewed when selected:
 
 ```json
 [
