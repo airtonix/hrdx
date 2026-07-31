@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -276,10 +277,30 @@ func (m *Model) trackBusy(target *pane) tea.Cmd {
 	return tea.Tick(1500*time.Millisecond, func(time.Time) tea.Msg { return soundConfirmMsg{id: id} })
 }
 
-// playFinishSound rings the terminal bell; terminals map it to the system
-// alert sound (or a visual bell) per user preference.
+// playFinishSound plays an audible notification. Terminals often map
+// the bell to a silent badge or attention bounce, so an OS sound player
+// is preferred: afplay with a system sound on macOS, the freedesktop
+// complete sound via canberra/pulse/alsa players on Linux. The terminal
+// bell is the last resort.
 func playFinishSound() {
-	_, _ = os.Stdout.WriteString("\a")
+	go func() {
+		candidates := [][]string{
+			{"afplay", "/System/Library/Sounds/Glass.aiff"},
+			{"canberra-gtk-play", "-i", "complete"},
+			{"paplay", "/usr/share/sounds/freedesktop/stereo/complete.oga"},
+			{"aplay", "-q", "/usr/share/sounds/alsa/Front_Center.wav"},
+		}
+		for _, candidate := range candidates {
+			path, err := exec.LookPath(candidate[0])
+			if err != nil {
+				continue
+			}
+			if exec.Command(path, candidate[1:]...).Run() == nil {
+				return
+			}
+		}
+		_, _ = os.Stdout.WriteString("\a")
+	}()
 }
 
 // spinnerFrames matches zot's own braille spinner.
