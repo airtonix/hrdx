@@ -17,12 +17,13 @@ type agentSpec struct {
 	custom      bool     // registered from harness.json
 }
 
-// agentSpecs lists the supported agents in menu/cycle order.
+// agentSpecs lists the supported agents in menu/cycle order
+// (alphabetical; custom harnesses append after the built-ins).
 var agentSpecs = []agentSpec{
-	{kind: "zot", binary: "zot", resume: []string{"--continue"}},
-	{kind: "pi", binary: "pi", resume: []string{"--continue"}},
-	{kind: "claude", binary: "claude", resume: []string{"--continue"}},
 	{kind: "codex", binary: "codex", resume: []string{"resume", "--last"}, resumeFirst: true},
+	{kind: "claude", binary: "claude", resume: []string{"--continue"}},
+	{kind: "pi", binary: "pi", resume: []string{"--continue"}},
+	{kind: "zot", binary: "zot", resume: []string{"--continue"}},
 }
 
 func agentByKind(kind string) *agentSpec {
