@@ -1104,8 +1104,8 @@ func (m *Model) openMenuBox(at rect) {
 	m.menuIndex = 0
 	width := 0
 	for _, item := range m.menuItems() {
-		if len(item.label) > width {
-			width = len(item.label)
+		if w := lipgloss.Width(item.label); w > width {
+			width = w
 		}
 	}
 	width += 4 // padding + border
@@ -2067,7 +2067,7 @@ func (m Model) overlayMenu(rows []string) {
 	lines := make([]string, 0, box.h)
 	lines = append(lines, border.Render("╭"+strings.Repeat("─", innerW)+"╮"))
 	for index, item := range m.menuItems() {
-		label := " " + item.label + strings.Repeat(" ", max(0, innerW-len(item.label)-1))
+		label := " " + item.label + strings.Repeat(" ", max(0, innerW-lipgloss.Width(item.label)-1))
 		style := normal
 		if index == m.menuIndex {
 			style = active

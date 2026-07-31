@@ -108,7 +108,7 @@ const settingsHint = "enter toggle   tab section   esc close"
 // centered and sized for the widest section so switching tabs never
 // reshapes the window.
 func (m Model) settingsBox() rect {
-	width := len(settingsHint)
+	width := lipgloss.Width(settingsHint)
 	rowCount := 0
 	tab := m.settingsTab
 	for index := range settingsTabNames {
@@ -119,8 +119,8 @@ func (m Model) settingsBox() rect {
 			rowCount = len(rows)
 		}
 		for _, row := range rows {
-			if len(row.label) > width {
-				width = len(row.label)
+			if w := lipgloss.Width(row.label); w > width {
+				width = w
 			}
 		}
 	}
@@ -252,7 +252,7 @@ func (m Model) overlaySettings(bodyRows []string) {
 			tabs.WriteString(muted.Render(label))
 		}
 		tabs.WriteString(fill.Render(" "))
-		used += len(label) + 1
+		used += lipgloss.Width(label) + 1
 	}
 	tabs.WriteString(fill.Render(strings.Repeat(" ", max(0, innerW-used))))
 
@@ -266,10 +266,10 @@ func (m Model) overlaySettings(bodyRows []string) {
 		if index == m.settingsIndex {
 			style = active
 		}
-		lines = append(lines, border.Render("│")+style.Render(pad("  "+row.label, len(row.label)+2))+border.Render("│"))
+		lines = append(lines, border.Render("│")+style.Render(pad("  "+row.label, lipgloss.Width(row.label)+2))+border.Render("│"))
 	}
 	lines = append(lines, border.Render("│")+fill.Render(pad("", 0))+border.Render("│"))
-	lines = append(lines, border.Render("│")+muted.Render(pad("  "+settingsHint, len(settingsHint)+2))+border.Render("│"))
+	lines = append(lines, border.Render("│")+muted.Render(pad("  "+settingsHint, lipgloss.Width(settingsHint)+2))+border.Render("│"))
 	lines = append(lines, border.Render("╰"+strings.Repeat("─", innerW)+"╯"))
 
 	for i, line := range lines {
