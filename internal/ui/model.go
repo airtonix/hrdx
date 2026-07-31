@@ -1,0 +1,2078 @@
+package ui
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/patriceckhart/hrdx/internal/state"
+	"github.com/patriceckhart/hrdx/internal/term"
+)
+
+func contains(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+const sidebarWidth = 26
+
+type inputMode int
+
+const (
+	modeTerminal inputMode = iota
+	modePrefix
+	modeNewSpace
+	modeRename
+	modeMenu
+)
+
+// menuItem is one entry of the right-click context menu.
+type menuItem struct {
+	label  string
+	action string
+}
+
+var paneMenuItems = []menuItem{
+	{"Rename pane", "rename"},
+	{"Split left...", "pick-left"},
+	{"Split right...", "pick-right"},
+	{"Split up...", "pick-up"},
+	{"Split down...", "pick-down"},
+	{"Close pane", "close"},
+}
+
+var tabMenuItems = []menuItem{
+	{"New tab", "tab-new"},
+	{"Rename tab", "tab-rename"},
+	{"Close tab", "tab-close"},
+}
+
+var spaceMenuItems = []menuItem{
+	{"Rename", "space-rename"},
+	{"Close", "space-close"},
+	{"New tab", "space-tab"},
+}
+
+// Config carries the launch settings for agent panes.
+type Config struct {
+	DefaultAgent string            // agent kind used for new panes and splits
+	AgentBins    map[string]string // per-agent binary overrides
+	ZotArgs      []string          // extra args passed to zot panes only
+	Shell        string
+}
+
+type pane struct {
+	id      int
+	name    string
+	kind    string // agent kind ("zot", "pi", "claude", "codex") or "shell"
+	term    *term.Pane
+	running bool
+	failure string
+	resume  bool // restored agent pane: relaunch resuming its session
+}
+
+// tab is one tabbed layout of panes inside a workspace.
+type tab struct {
+	name     string
+	panes    []*pane
+	layout   *splitNode
+	selected int
+}
+
+type space struct {
+	name   string
+	cwd    string
+	tabs   []*tab
+	active int
+}
+
+// tab returns the active tab, never nil for a live workspace.
+func (s *space) tab() *tab {
+	if len(s.tabs) == 0 {
+		s.tabs = []*tab{{}}
+		s.active = 0
+	}
+	s.active = clampInt(s.active, 0, len(s.tabs)-1)
+	return s.tabs[s.active]
+}
+
+type Model struct {
+	config      Config
+	spaces      []*space
+	selected    int
+	nextID      int
+	width       int
+	height      int
+	mode        inputMode
+	input       textinput.Model
+	status      string
+	kittyPushed bool
+	drag        *splitNode
+	dragFull    rect
+	statePath   string
+	spinFrame   int
+	ticking     bool
+	selPane     *pane
+	selRect     rect
+	statusSeq   int
+	menuPane    *pane
+	menuTab     *tab
+	menuSpace   *space
+	menuAt      rect // menu box in body coordinates
+	menuIndex   int
+	pickItems   []menuItem // kind picker entries while it is open
+	pickAction  string     // "space", "tab", "split-right", "split-down"
+	pickSpace   *space     // tab target for the picker
+	pickPath    string     // directory for a pending new workspace
+	renamePane  *pane
+	renameTab   *tab
+	renameSpace *space
+	branches    map[string]branchInfo
+	completions []string
+	completion  int
+	sideScroll  int
+	hintScroll  int // first visible hint in the ctrl+b footer row
+}
+
+// menuItems returns the entries of the currently open context menu.
+func (m Model) menuItems() []menuItem {
+	if m.pickAction != "" {
+		return m.pickItems
+	}
+	if m.menuSpace != nil {
+		return spaceMenuItems
+	}
+	if m.menuTab != nil {
+		return tabMenuItems
+	}
+	return paneMenuItems
+}
+
+type statusExpireMsg struct{ seq int }
+
+// flashStatus shows a footer message that clears after two seconds.
+func (m *Model) flashStatus(text string) tea.Cmd {
+	m.status = text
+	m.statusSeq++
+	seq := m.statusSeq
+	return tea.Tick(2*time.Second, func(time.Time) tea.Msg { return statusExpireMsg{seq: seq} })
+}
+
+// spinnerFrames matches zot's own braille spinner.
+var spinnerFrames = []string{"⠋", "⠙", "⠚", "⠞", "⠖", "⠦", "⠴", "⠲", "⠳", "⠓"}
+
+type spinTickMsg struct{}
+
+func spinTick() tea.Cmd {
+	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return spinTickMsg{} })
+}
+
+// anyBusy reports whether any zot pane is currently working.
+func (m *Model) anyBusy() bool {
+	for _, currentSpace := range m.spaces {
+		for _, currentTab := range currentSpace.tabs {
+			for _, currentPane := range currentTab.panes {
+				if paneBusy(currentPane) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// Kitty keyboard protocol sequences, mirroring zot's own pair. The push must
+// happen while the alternate screen is active because the protocol keeps a
+// separate mode stack per screen; pushing on the main screen has no effect
+// inside the TUI. modifyOtherKeys is included as an xterm fallback.
+const (
+	seqEnhancedKeysOn  = "\x1b[>1u\x1b[>4;2m"
+	seqEnhancedKeysOff = "\x1b[<u\x1b[>4m"
+)
+
+type paneUpdateMsg struct {
+	id   int
+	open bool
+}
+
+type paneStartedMsg struct {
+	id   int
+	term *term.Pane
+	err  error
+}
+
+// New builds the model. Saved workspaces from statePath are restored first;
+// paths not already present are added on top. Pass statePath == "" to
+// disable persistence.
+func New(config Config, paths []string, statePath string, saved state.State) Model {
+	if config.Shell == "" {
+		config.Shell = "/bin/zsh"
+	}
+	if !isAgentKind(config.DefaultAgent) {
+		config.DefaultAgent = "zot"
+	}
+	input := textinput.New()
+	input.Placeholder = "directory (e.g. ~/Developer/api)"
+	input.Prompt = ""
+
+	model := Model{config: config, input: input, nextID: 1, statePath: statePath, branches: map[string]branchInfo{}}
+	model.restore(saved)
+	for _, path := range paths {
+		exists := false
+		for _, currentSpace := range model.spaces {
+			if currentSpace.cwd == path {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			model.addSpace(path)
+		}
+	}
+	return model
+}
+
+func (m *Model) addSpace(path string) *space {
+	return m.addSpaceKind(path, m.config.DefaultAgent)
+}
+
+func (m *Model) addSpaceKind(path, kind string) *space {
+	newSpace := &space{name: filepath.Base(path), cwd: path, tabs: []*tab{{}}}
+	m.spaces = append(m.spaces, newSpace)
+	m.addPane(newSpace, kind, true)
+	return newSpace
+}
+
+// addTab appends a fresh tab with one pane of the given kind, activating it.
+func (m *Model) addTab(target *space, kind string) *pane {
+	target.tabs = append(target.tabs, &tab{})
+	target.active = len(target.tabs) - 1
+	return m.addPane(target, kind, true)
+}
+
+// addPane creates a pane and inserts it into the active tab's layout by
+// splitting the focused pane. vertical means a side-by-side split; before
+// puts the new pane left of or above the focused one.
+func (m *Model) addPane(target *space, kind string, vertical bool) *pane {
+	return m.addPaneSide(target, kind, vertical, false)
+}
+
+func (m *Model) addPaneSide(target *space, kind string, vertical, before bool) *pane {
+	currentTab := target.tab()
+	count := 1
+	for _, currentTabs := range target.tabs {
+		for _, existing := range currentTabs.panes {
+			if existing.kind == kind {
+				count++
+			}
+		}
+	}
+	newPane := &pane{id: m.nextID, name: fmt.Sprintf("%s %d", kind, count), kind: kind}
+	m.nextID++
+
+	if currentTab.layout == nil {
+		currentTab.layout = leafNode(newPane)
+	} else {
+		focused := currentTab.panes[currentTab.selected]
+		insertAtSide(currentTab.layout, focused, newPane, vertical, before)
+	}
+	currentTab.panes = append(currentTab.panes, newPane)
+	currentTab.selected = len(currentTab.panes) - 1
+	return newPane
+}
+
+// resolveDir expands ~, makes the path absolute, and requires a directory.
+func resolveDir(value string) (string, error) {
+	if value == "~" || strings.HasPrefix(value, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		value = filepath.Join(home, strings.TrimPrefix(value, "~"))
+	}
+	path, err := filepath.Abs(value)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("%s does not exist", path)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("%s is not a directory", path)
+	}
+	return path, nil
+}
+
+func (m Model) Init() tea.Cmd {
+	var commands []tea.Cmd
+	for _, currentSpace := range m.spaces {
+		for _, currentTab := range currentSpace.tabs {
+			for _, currentPane := range currentTab.panes {
+				commands = append(commands, m.startPane(currentSpace, currentPane))
+			}
+		}
+	}
+	return tea.Batch(commands...)
+}
+
+func (m Model) startPane(owner *space, target *pane) tea.Cmd {
+	// Before the first WindowSizeMsg the layout collapses to the minimum
+	// pane size; starting PTYs at 8x2 makes TUIs render wrapped garbage.
+	// Keep the 80x24 default until the real size is known.
+	cols, rows := 80, 24
+	if m.width > 0 && m.height > 0 {
+		for _, currentTab := range owner.tabs {
+			for _, pr := range m.layoutFor(currentTab) {
+				if pr.pane == target {
+					inner := pr.r.inner()
+					cols, rows = inner.w, inner.h
+				}
+			}
+		}
+	}
+	command := m.config.Shell
+	args := []string{"-l"}
+	if spec := agentByKind(target.kind); spec != nil {
+		command = m.config.binaryFor(target.kind)
+		args = nil
+		if target.kind == "zot" {
+			args = append([]string{}, m.config.ZotArgs...)
+		}
+		if target.resume && len(spec.resume) > 0 && !contains(args, spec.resume[0]) {
+			if spec.resumeFirst {
+				args = append(append([]string{}, spec.resume...), args...)
+			} else {
+				args = append(args, spec.resume...)
+			}
+		}
+	}
+	cwd := owner.cwd
+	id := target.id
+	return func() tea.Msg {
+		started, err := term.Start(command, args, cwd, cols, rows)
+		return paneStartedMsg{id: id, term: started, err: err}
+	}
+}
+
+// terminalArea is the local rect of the pane region (right of the sidebar,
+// below the tab bar, above the footer). Row 0 of the body is the tab bar.
+func (m Model) terminalArea() rect {
+	return rect{0, 0, max(minPaneCols, m.width-sidebarWidth-1), max(minPaneRows, m.height-3)}
+}
+
+func (m Model) layoutFor(target *tab) []paneRect {
+	panes, _ := m.layoutAll(target)
+	return panes
+}
+
+func (m Model) layoutAll(target *tab) ([]paneRect, []divRect) {
+	var panes []paneRect
+	var divs []divRect
+	layoutNode(target.layout, m.terminalArea(), &panes, &divs)
+	return panes, divs
+}
+
+// resizePanes pushes the layout geometry of every tab into its PTYs, not
+// just the active one: hidden tabs must track size changes too, otherwise
+// switching back shows a stale-size buffer with wrapped leftovers.
+// PTYs get the content size inside each pane's border.
+func (m *Model) resizePanes(target *space) {
+	for _, currentTab := range target.tabs {
+		for _, pr := range m.layoutFor(currentTab) {
+			if pr.pane.term != nil {
+				inner := pr.r.inner()
+				pr.pane.term.Resize(inner.w, inner.h)
+			}
+		}
+	}
+}
+
+func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := message.(type) {
+	case tea.WindowSizeMsg:
+		if !m.kittyPushed {
+			// The first size message arrives after Bubble Tea entered the
+			// alt screen, so the push lands on the correct mode stack.
+			_, _ = os.Stdout.WriteString(seqEnhancedKeysOn)
+			m.kittyPushed = true
+		}
+		m.width, m.height = msg.Width, msg.Height
+		for _, currentSpace := range m.spaces {
+			m.resizePanes(currentSpace)
+		}
+		return m, nil
+
+	case paneStartedMsg:
+		target, owner := m.paneByID(msg.id)
+		if target == nil {
+			if msg.term != nil {
+				msg.term.Close()
+			}
+			return m, nil
+		}
+		if msg.err != nil {
+			target.failure = msg.err.Error()
+			return m, nil
+		}
+		target.term = msg.term
+		target.running = true
+		m.resizePanes(owner)
+		return m, waitForUpdate(msg.id, msg.term.Updates())
+
+	case paneUpdateMsg:
+		target, _ := m.paneByID(msg.id)
+		if target == nil || target.term == nil {
+			return m, nil
+		}
+		if !msg.open {
+			target.running = false
+			return m, nil
+		}
+		var tick tea.Cmd
+		if !m.ticking && m.anyBusy() {
+			m.ticking = true
+			tick = spinTick()
+		}
+		return m, tea.Batch(waitForUpdate(msg.id, target.term.Updates()), tick)
+
+	case spinTickMsg:
+		if m.anyBusy() {
+			m.spinFrame = (m.spinFrame + 1) % len(spinnerFrames)
+			return m, spinTick()
+		}
+		m.ticking = false
+		return m, nil
+
+	case statusExpireMsg:
+		if msg.seq == m.statusSeq {
+			m.status = ""
+		}
+		return m, nil
+
+	case tea.KeyMsg:
+		return m.updateKey(msg)
+
+	case tea.MouseMsg:
+		return m.updateMouse(msg)
+	}
+
+	// Kitty CSI-u chords (ctrl+1, ...) arrive as unexported messages.
+	if raw, ok := rawInputBytes(message); ok {
+		return m.updateRaw(raw)
+	}
+
+	if m.mode == modeNewSpace {
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(message)
+		return m, cmd
+	}
+	return m, nil
+}
+
+// updateRaw routes raw CSI-u input from the host terminal. Kitty-aware
+// children (zot) get the sequence verbatim so chords like ctrl+1 survive;
+// legacy children (shells) get the classic encoding instead.
+func (m Model) updateRaw(raw []byte) (tea.Model, tea.Cmd) {
+	// Shift+PgUp / Shift+PgDn scroll the focused pane's history.
+	if m.mode == modeTerminal {
+		switch string(raw) {
+		case "\x1b[5;2~":
+			m.scrollCurrent(m.pageStep())
+			return m, nil
+		case "\x1b[6;2~":
+			m.scrollCurrent(-m.pageStep())
+			return m, nil
+		}
+	}
+	code, mods, ok := parseCSIU(raw)
+	if ok && code == 'b' && mods&modCtrl != 0 && m.mode == modeTerminal {
+		m.mode = modePrefix
+		return m, nil
+	}
+	if ok && m.mode != modeTerminal {
+		// Translate the chord for the local input modes.
+		if legacy := legacyEncode(code, mods); len(legacy) > 0 {
+			return m.updateKey(keyFromBytes(legacy, code, mods))
+		}
+		return m, nil
+	}
+	current := m.currentPane()
+	if current == nil || current.term == nil || !current.running {
+		return m, nil
+	}
+	if !ok || current.term.KittyKeys() {
+		current.term.Write(raw)
+		return m, nil
+	}
+	if legacy := legacyEncode(code, mods); len(legacy) > 0 {
+		current.term.Write(legacy)
+	}
+	return m, nil
+}
+
+// keyFromBytes maps a decoded chord onto the KeyMsg values the local modes use.
+func keyFromBytes(legacy []byte, code rune, mods int) tea.KeyMsg {
+	switch code {
+	case 27:
+		return tea.KeyMsg{Type: tea.KeyEsc}
+	case 13:
+		return tea.KeyMsg{Type: tea.KeyEnter}
+	case 9:
+		return tea.KeyMsg{Type: tea.KeyTab}
+	case 127:
+		return tea.KeyMsg{Type: tea.KeyBackspace}
+	}
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(string(legacy)), Alt: mods&modAlt != 0}
+}
+
+func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch m.mode {
+	case modeRename:
+		switch msg.String() {
+		case "esc":
+			m.mode = modeTerminal
+			m.renamePane = nil
+			m.renameTab = nil
+			m.renameSpace = nil
+			m.input.Blur()
+			return m, nil
+		case "enter":
+			value := strings.TrimSpace(m.input.Value())
+			if value != "" {
+				if m.renamePane != nil {
+					m.renamePane.name = value
+				}
+				if m.renameTab != nil {
+					m.renameTab.name = value
+				}
+				if m.renameSpace != nil {
+					m.renameSpace.name = value
+				}
+				m.persist()
+			}
+			m.mode = modeTerminal
+			m.renamePane = nil
+			m.renameTab = nil
+			m.renameSpace = nil
+			m.input.Blur()
+			m.input.SetValue("")
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
+
+	case modeMenu:
+		items := m.menuItems()
+		switch msg.String() {
+		case "esc", "q":
+			m.closeMenu()
+			return m, nil
+		case "up", "k":
+			m.menuIndex = (m.menuIndex - 1 + len(items)) % len(items)
+			return m, nil
+		case "down", "j":
+			m.menuIndex = (m.menuIndex + 1) % len(items)
+			return m, nil
+		case "enter":
+			return m.runMenuAction(items[m.menuIndex].action)
+		}
+		return m, nil
+
+	case modeNewSpace:
+		switch msg.String() {
+		case "esc":
+			m.mode = modeTerminal
+			m.clearCompletions()
+			m.input.Blur()
+			return m, nil
+		case "tab", "shift+tab":
+			delta := 1
+			if msg.String() == "shift+tab" {
+				delta = -1
+			}
+			m.advanceCompletion(delta)
+			return m, nil
+		case "enter":
+			value := strings.TrimSpace(m.input.Value())
+			if value == "" {
+				m.mode = modeTerminal
+				m.clearCompletions()
+				m.input.Blur()
+				return m, nil
+			}
+			path, err := resolveDir(value)
+			if err != nil {
+				return m, m.flashStatus(err.Error())
+			}
+			m.clearCompletions()
+			m.input.Blur()
+			m.input.SetValue("")
+			m.status = ""
+			m.openKindPicker("space", nil, path, rect{x: 1, y: max(1, m.height-4-len(m.availableAgents()))})
+			return m, nil
+		}
+		m.clearCompletions()
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
+
+	case modePrefix:
+		// Arrows page through the hint row on narrow terminals without
+		// leaving prefix mode.
+		switch msg.String() {
+		case "right":
+			m.hintScroll = min(m.hintScroll+1, len(prefixHintList)-1)
+			return m, nil
+		case "left":
+			m.hintScroll = max(0, m.hintScroll-1)
+			return m, nil
+		}
+		m.mode = modeTerminal
+		m.hintScroll = 0
+		return m.runPrefix(msg)
+
+	default: // modeTerminal
+		if msg.String() == "ctrl+b" {
+			m.mode = modePrefix
+			return m, nil
+		}
+		if current := m.currentPane(); current != nil && current.term != nil && current.running {
+			current.term.Write(term.EncodeKey(msg, current.term.AppCursor()))
+		}
+		return m, nil
+	}
+}
+
+func (m Model) runPrefix(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+b":
+		if current := m.currentPane(); current != nil && current.term != nil {
+			current.term.Write([]byte{0x02})
+		}
+	case "q":
+		m.closeAll()
+		return m, tea.Quit
+	case "c":
+		m.openKindPicker("split-right", nil, "", rect{x: sidebarWidth + 2, y: 1})
+	case "C":
+		m.openKindPicker("split-down", nil, "", rect{x: sidebarWidth + 2, y: 1})
+	case "a":
+		m.cycleAgent()
+		return m, m.flashStatus("default agent: " + m.config.DefaultAgent)
+	case "s", "%", "|":
+		return m.splitCurrent("shell", true)
+	case "S", "\"", "-":
+		return m.splitCurrent("shell", false)
+	case "w":
+		return m.openNewSpaceInput()
+	case "t":
+		if currentSpace := m.currentSpace(); currentSpace != nil {
+			m.openKindPicker("tab", currentSpace, "", rect{x: sidebarWidth + 2, y: 1})
+		}
+	case "n":
+		m.selectTab(1)
+	case "p":
+		m.selectTab(-1)
+	case "]", "tab":
+		m.selectSpace(1)
+	case "[", "shift+tab":
+		m.selectSpace(-1)
+	case "x":
+		m.closeCurrentPane()
+	case "X":
+		m.closeCurrentSpace()
+	case "=":
+		m.equalizeCurrent()
+	case "r":
+		return m.openRenameInput(m.currentPane())
+	case "m":
+		if current := m.currentPane(); current != nil {
+			m.openMenu(current, rect{x: 2, y: 1})
+		}
+	case "u", "pgup":
+		m.scrollCurrent(m.pageStep())
+	case "d", "pgdown":
+		m.scrollCurrent(-m.pageStep())
+	case "esc", "G":
+		if current := m.currentPane(); current != nil && current.term != nil {
+			current.term.ResetScroll()
+			current.term.ClearSelection()
+		}
+	}
+	return m, nil
+}
+
+func (m Model) pageStep() int {
+	return max(1, (m.height-2)/2)
+}
+
+func (m *Model) scrollCurrent(delta int) {
+	if current := m.currentPane(); current != nil && current.term != nil {
+		current.term.Scroll(delta)
+	}
+}
+
+func (m *Model) splitCurrent(kind string, vertical bool) (tea.Model, tea.Cmd) {
+	return m.splitCurrentSide(kind, vertical, false)
+}
+
+func (m *Model) splitCurrentSide(kind string, vertical, before bool) (tea.Model, tea.Cmd) {
+	currentSpace := m.currentSpace()
+	if currentSpace == nil {
+		return *m, nil
+	}
+	newPane := m.addPaneSide(currentSpace, kind, vertical, before)
+	m.resizePanes(currentSpace)
+	m.persist()
+	return *m, m.startPane(currentSpace, newPane)
+}
+
+func (m *Model) equalizeCurrent() {
+	currentSpace := m.currentSpace()
+	if currentSpace == nil {
+		return
+	}
+	var walk func(n *splitNode)
+	walk = func(n *splitNode) {
+		if n == nil || n.pane != nil {
+			return
+		}
+		n.ratio = 0.5
+		walk(n.a)
+		walk(n.b)
+	}
+	walk(currentSpace.tab().layout)
+	m.resizePanes(currentSpace)
+	m.persist()
+}
+
+func (m *Model) openNewSpaceInput() (tea.Model, tea.Cmd) {
+	m.mode = modeNewSpace
+	m.status = ""
+	m.input.Placeholder = "directory (tab completes)"
+	m.input.SetValue("")
+	m.clearCompletions()
+	m.input.Focus()
+	return *m, textinput.Blink
+}
+
+func (m *Model) clearCompletions() {
+	m.completions = nil
+	m.completion = -1
+}
+
+// advanceCompletion completes the typed path. The first tab fills the
+// common prefix and shows candidates; further tabs cycle through them.
+func (m *Model) advanceCompletion(delta int) {
+	if len(m.completions) > 0 {
+		m.completion = (m.completion + delta + len(m.completions)) % len(m.completions)
+		m.input.SetValue(m.completions[m.completion])
+		m.input.CursorEnd()
+		return
+	}
+	matches := completeDir(strings.TrimSpace(m.input.Value()))
+	if len(matches) == 0 {
+		return
+	}
+	if len(matches) == 1 {
+		m.input.SetValue(matches[0] + "/")
+		m.input.CursorEnd()
+		return
+	}
+	m.completions = matches
+	m.completion = -1
+	if shared := commonPrefix(matches); len(shared) > len(strings.TrimSpace(m.input.Value())) {
+		m.input.SetValue(shared)
+		m.input.CursorEnd()
+	}
+}
+
+func (m *Model) openRenameInput(target *pane) (tea.Model, tea.Cmd) {
+	if target == nil {
+		return *m, nil
+	}
+	m.mode = modeRename
+	m.renamePane = target
+	m.input.Placeholder = "pane name"
+	m.input.SetValue(target.name)
+	m.input.CursorEnd()
+	m.input.Focus()
+	return *m, textinput.Blink
+}
+
+func (m *Model) openRenameTabInput(target *tab, index int) (tea.Model, tea.Cmd) {
+	if target == nil {
+		return *m, nil
+	}
+	m.mode = modeRename
+	m.renameTab = target
+	m.input.Placeholder = "tab name"
+	name := target.name
+	if name == "" {
+		name = fmt.Sprintf("%d", index+1)
+	}
+	m.input.SetValue(name)
+	m.input.CursorEnd()
+	m.input.Focus()
+	return *m, textinput.Blink
+}
+
+// openMenuBox positions the context menu for the current item list. The
+// coordinates are body coordinates: the full row below the header,
+// spanning sidebar and terminal.
+func (m *Model) openMenuBox(at rect) {
+	m.menuIndex = 0
+	width := 0
+	for _, item := range m.menuItems() {
+		if len(item.label) > width {
+			width = len(item.label)
+		}
+	}
+	width += 4 // padding + border
+	height := len(m.menuItems()) + 2
+
+	bodyW := max(1, m.width)
+	bodyH := max(1, m.height-2)
+	x := clampInt(at.x, 0, max(0, bodyW-width))
+	y := clampInt(at.y, 0, max(0, bodyH-height))
+	m.menuAt = rect{x, y, width, height}
+}
+
+func (m *Model) openMenu(target *pane, at rect) {
+	m.mode = modeMenu
+	m.menuPane = target
+	m.menuTab = nil
+	m.openMenuBox(at)
+}
+
+func (m *Model) openTabMenu(target *tab, at rect) {
+	m.mode = modeMenu
+	m.menuPane = nil
+	m.menuTab = target
+	m.menuSpace = nil
+	m.openMenuBox(at)
+}
+
+func (m *Model) openSpaceMenu(target *space, at rect) {
+	m.mode = modeMenu
+	m.menuPane = nil
+	m.menuTab = nil
+	m.menuSpace = target
+	m.openMenuBox(at)
+}
+
+func (m *Model) openRenameSpaceInput(target *space) (tea.Model, tea.Cmd) {
+	if target == nil {
+		return *m, nil
+	}
+	m.mode = modeRename
+	m.renameSpace = target
+	m.input.Placeholder = "workspace name"
+	m.input.SetValue(target.name)
+	m.input.CursorEnd()
+	m.input.Focus()
+	return *m, textinput.Blink
+}
+
+func (m *Model) closeMenu() {
+	m.mode = modeTerminal
+	m.menuPane = nil
+	m.menuTab = nil
+	m.menuSpace = nil
+	m.pickItems = nil
+	m.pickAction = ""
+	m.pickSpace = nil
+	m.pickPath = ""
+}
+
+// openKindPicker shows a menu with the installed agents plus shell. The
+// chosen kind feeds the pending action: new workspace, new tab, or split.
+func (m *Model) openKindPicker(action string, target *space, path string, at rect) {
+	var items []menuItem
+	for _, kind := range m.availableAgents() {
+		items = append(items, menuItem{kind, "kind:" + kind})
+	}
+	items = append(items, menuItem{"shell", "kind:shell"})
+
+	m.mode = modeMenu
+	m.menuPane = nil
+	m.menuTab = nil
+	m.menuSpace = nil
+	m.pickItems = items
+	m.pickAction = action
+	m.pickSpace = target
+	m.pickPath = path
+	m.openMenuBox(at)
+	// Preselect the default agent so enter keeps the old one-key flow.
+	for index, item := range items {
+		if item.action == "kind:"+m.config.DefaultAgent {
+			m.menuIndex = index
+		}
+	}
+}
+
+// runKindPick executes the pending picker action with the chosen kind.
+func (m Model) runKindPick(kind string) (tea.Model, tea.Cmd) {
+	action, target, path := m.pickAction, m.pickSpace, m.pickPath
+	m.closeMenu()
+	switch action {
+	case "space":
+		newSpace := m.addSpaceKind(path, kind)
+		m.selected = len(m.spaces) - 1
+		m.persist()
+		return m, m.startPane(newSpace, newSpace.tab().panes[0])
+	case "tab":
+		if target == nil {
+			target = m.currentSpace()
+		}
+		if target == nil {
+			return m, nil
+		}
+		for index, currentSpace := range m.spaces {
+			if currentSpace == target {
+				m.selected = index
+			}
+		}
+		newPane := m.addTab(target, kind)
+		m.resizePanes(target)
+		m.persist()
+		return m, m.startPane(target, newPane)
+	case "split-left":
+		return m.splitCurrentSide(kind, true, true)
+	case "split-right":
+		return m.splitCurrent(kind, true)
+	case "split-up":
+		return m.splitCurrentSide(kind, false, true)
+	case "split-down":
+		return m.splitCurrent(kind, false)
+	}
+	return m, nil
+}
+
+func (m Model) runMenuAction(action string) (tea.Model, tea.Cmd) {
+	if kind, ok := strings.CutPrefix(action, "kind:"); ok {
+		return m.runKindPick(kind)
+	}
+	targetPane := m.menuPane
+	targetTab := m.menuTab
+	targetSpace := m.menuSpace
+	at := m.menuAt
+	m.closeMenu()
+
+	if targetSpace != nil {
+		for index, currentSpace := range m.spaces {
+			if currentSpace == targetSpace {
+				m.selected = index
+			}
+		}
+		switch action {
+		case "space-rename":
+			return m.openRenameSpaceInput(targetSpace)
+		case "space-close":
+			m.closeCurrentSpace()
+		case "space-tab":
+			m.openKindPicker("tab", targetSpace, "", at)
+		}
+		return m, nil
+	}
+
+	if targetTab != nil {
+		currentSpace := m.currentSpace()
+		if currentSpace == nil {
+			return m, nil
+		}
+		tabIndex := 0
+		for index, currentTab := range currentSpace.tabs {
+			if currentTab == targetTab {
+				tabIndex = index
+			}
+		}
+		switch action {
+		case "tab-new":
+			m.openKindPicker("tab", currentSpace, "", at)
+		case "tab-rename":
+			return m.openRenameTabInput(targetTab, tabIndex)
+		case "tab-close":
+			if len(currentSpace.tabs) > 1 {
+				m.closeTab(currentSpace, targetTab)
+				m.resizePanes(currentSpace)
+				m.persist()
+			}
+		}
+		return m, nil
+	}
+
+	if targetPane == nil {
+		return m, nil
+	}
+	if currentSpace := m.currentSpace(); currentSpace != nil {
+		m.focusPane(currentSpace, targetPane)
+	}
+	switch action {
+	case "rename":
+		return m.openRenameInput(targetPane)
+	case "pick-left":
+		m.openKindPicker("split-left", nil, "", at)
+	case "pick-right":
+		m.openKindPicker("split-right", nil, "", at)
+	case "pick-up":
+		m.openKindPicker("split-up", nil, "", at)
+	case "pick-down":
+		m.openKindPicker("split-down", nil, "", at)
+	case "close":
+		m.closeCurrentPane()
+	}
+	return m, nil
+}
+
+func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// A pending ctrl+b prefix is cancelled by any mouse press so clicks
+	// never get swallowed silently.
+	if m.mode == modePrefix && msg.Action == tea.MouseActionPress {
+		m.mode = modeTerminal
+	}
+
+	localX := msg.X - sidebarWidth - 1
+	// Body row 0 is the tab bar; panes start one row below.
+	tabRow := msg.Y == 1 && localX >= 0
+	localY := msg.Y - 2
+	area := m.terminalArea()
+	inTerminal := localX >= 0 && localY >= 0 && localX < area.w && localY < area.h
+
+	// Tab bar clicks.
+	if tabRow && msg.Action == tea.MouseActionPress && m.mode == modeTerminal {
+		currentSpace := m.currentSpace()
+		if currentSpace == nil {
+			return m, nil
+		}
+		index, isNew := m.tabHit(currentSpace, localX)
+		if msg.Button == tea.MouseButtonRight {
+			if index >= 0 {
+				currentSpace.active = index
+				m.resizePanes(currentSpace)
+				m.openTabMenu(currentSpace.tabs[index], rect{x: msg.X, y: 1})
+			}
+			return m, nil
+		}
+		if msg.Button != tea.MouseButtonLeft {
+			return m, nil
+		}
+		if isNew {
+			m.openKindPicker("tab", currentSpace, "", rect{x: msg.X, y: 1})
+			return m, nil
+		}
+		if index >= 0 {
+			currentSpace.active = index
+			m.resizePanes(currentSpace)
+			m.persist()
+		}
+		return m, nil
+	}
+
+	// Context menu handling has priority while it is open. The menu lives
+	// in body coordinates covering the whole row below the header.
+	if m.mode == modeMenu {
+		bodyX, bodyY := msg.X, msg.Y-1
+		items := m.menuItems()
+		if msg.Action == tea.MouseActionMotion && m.menuAt.hit(bodyX, bodyY) {
+			index := bodyY - m.menuAt.y - 1
+			if index >= 0 && index < len(items) {
+				m.menuIndex = index
+			}
+			return m, nil
+		}
+		if msg.Action != tea.MouseActionPress {
+			return m, nil
+		}
+		if m.menuAt.hit(bodyX, bodyY) && msg.Button == tea.MouseButtonLeft {
+			index := bodyY - m.menuAt.y - 1
+			if index >= 0 && index < len(items) {
+				m.menuIndex = index
+				return m.runMenuAction(items[index].action)
+			}
+			return m, nil
+		}
+		m.closeMenu()
+		return m, nil
+	}
+
+	// Right-click on a pane opens the context menu.
+	if inTerminal && msg.Button == tea.MouseButtonRight && msg.Action == tea.MouseActionPress {
+		if currentSpace := m.currentSpace(); currentSpace != nil {
+			panes, _ := m.layoutAll(currentSpace.tab())
+			for _, pr := range panes {
+				if pr.r.hit(localX, localY) {
+					m.focusPane(currentSpace, pr.pane)
+					m.openMenu(pr.pane, rect{x: msg.X, y: msg.Y - 1})
+					return m, nil
+				}
+			}
+		}
+		return m, nil
+	}
+
+	// Divider dragging has priority over everything else.
+	if m.drag != nil {
+		switch msg.Action {
+		case tea.MouseActionMotion:
+			m.applyDrag(localX, localY)
+			return m, nil
+		case tea.MouseActionRelease:
+			m.applyDrag(localX, localY)
+			m.drag = nil
+			m.persist()
+			return m, nil
+		}
+	}
+
+	// Selection drag in progress.
+	if m.selPane != nil {
+		switch msg.Action {
+		case tea.MouseActionMotion:
+			if m.selPane.term != nil {
+				m.selPane.term.ExtendSelection(
+					clampInt(localX-m.selRect.x, 0, m.selRect.w-1),
+					clampInt(localY-m.selRect.y, 0, m.selRect.h-1))
+			}
+			return m, nil
+		case tea.MouseActionRelease:
+			var flash tea.Cmd
+			if m.selPane.term != nil {
+				m.selPane.term.FinishSelection()
+				text := m.selPane.term.SelectionText()
+				if strings.TrimSpace(text) == "" || !strings.Contains(text, "\n") && len([]rune(text)) <= 1 {
+					m.selPane.term.ClearSelection()
+				} else {
+					copyToClipboard(text)
+					flash = m.flashStatus(fmt.Sprintf("copied %d chars", len([]rune(text))))
+				}
+			}
+			m.selPane = nil
+			return m, flash
+		}
+	}
+
+	if inTerminal {
+		currentSpace := m.currentSpace()
+		if currentSpace == nil {
+			return m, nil
+		}
+		panes, divs := m.layoutAll(currentSpace.tab())
+
+		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+			for _, dv := range divs {
+				if dv.r.hit(localX, localY) {
+					m.drag = dv.node
+					m.dragFull = dv.full
+					return m, nil
+				}
+			}
+		}
+
+		for _, pr := range panes {
+			if !pr.r.hit(localX, localY) {
+				continue
+			}
+			inner := pr.r.inner()
+			paneX := clampInt(localX-inner.x, 0, inner.w-1)
+			paneY := clampInt(localY-inner.y, 0, inner.h-1)
+			terminal := pr.pane.term
+			captures := terminal != nil && pr.pane.running && terminal.MouseEnabled()
+
+			// Wheel: forward to capturing children, otherwise local scrollback.
+			if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
+				if terminal == nil {
+					return m, nil
+				}
+				if captures {
+					terminal.Write(encodeSGRMouse(msg, paneX, paneY))
+					return m, nil
+				}
+				if terminal.AltScreen() {
+					// Full-screen apps without mouse support get arrow keys,
+					// like normal terminals translate wheel events.
+					arrow := "\x1b[A"
+					if msg.Button == tea.MouseButtonWheelDown {
+						arrow = "\x1b[B"
+					}
+					terminal.Write([]byte(strings.Repeat(arrow, 3)))
+					return m, nil
+				}
+				delta := 3
+				if msg.Button == tea.MouseButtonWheelDown {
+					delta = -3
+				}
+				terminal.Scroll(delta)
+				return m, nil
+			}
+
+			if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+				m.focusPane(currentSpace, pr.pane)
+				if terminal != nil {
+					terminal.ClearSelection()
+				}
+				// Shift forces local selection even over capturing children,
+				// matching normal terminal convention.
+				if terminal != nil && (!captures || msg.Shift) && inner.hit(localX, localY) {
+					terminal.StartSelection(paneX, paneY)
+					m.selPane = pr.pane
+					m.selRect = inner
+					return m, nil
+				}
+			}
+			if captures {
+				terminal.Write(encodeSGRMouse(msg, paneX, paneY))
+			}
+			return m, nil
+		}
+		return m, nil
+	}
+
+	// Wheel over the sidebar scrolls it when the content overflows. One
+	// row per tick: trackpads emit many wheel events per gesture, and the
+	// list is short, so bigger steps feel jumpy compared to terminal
+	// scrollback.
+	if msg.X <= sidebarWidth && (msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown) {
+		delta := -1
+		if msg.Button == tea.MouseButtonWheelDown {
+			delta = 1
+		}
+		total := len(m.sidebarRows())
+		m.sideScroll = clampInt(m.sidebarOffset(total)+delta, 0, max(0, total-max(3, m.height-2)))
+		return m, nil
+	}
+
+	// Right-click anywhere on a workspace's sidebar rows (name, branch,
+	// panes) opens the workspace context menu next to the cursor.
+	if msg.Button == tea.MouseButtonRight && msg.Action == tea.MouseActionPress {
+		kind, index, _ := m.sidebarHit(msg.Y - 1)
+		if (kind == "space" || kind == "pane") && index >= 0 && index < len(m.spaces) {
+			m.selected = index
+			m.openSpaceMenu(m.spaces[index], rect{x: msg.X, y: msg.Y - 1})
+		}
+		return m, nil
+	}
+
+	if msg.Button != tea.MouseButtonLeft || msg.Action != tea.MouseActionPress {
+		return m, nil
+	}
+	// The sidebar starts at body row 0 (screen row 1).
+	kind, index, sub := m.sidebarHit(msg.Y - 1)
+	switch kind {
+	case "space":
+		if index >= 0 && index < len(m.spaces) {
+			m.selected = index
+		}
+	case "pane":
+		if index >= 0 && index < len(m.spaces) {
+			m.selected = index
+			if target := m.paneByIndex(m.spaces[index], sub); target != nil {
+				m.focusPane(m.spaces[index], target)
+			}
+		}
+	case "new":
+		return m.openNewSpaceInput()
+	}
+	return m, nil
+}
+
+// paneByIndex resolves a flat pane index (across tabs) for sidebar rows.
+func (m *Model) paneByIndex(owner *space, flat int) *pane {
+	count := 0
+	for _, currentTab := range owner.tabs {
+		for _, currentPane := range currentTab.panes {
+			if count == flat {
+				return currentPane
+			}
+			count++
+		}
+	}
+	return nil
+}
+
+func (m *Model) applyDrag(localX, localY int) {
+	if m.drag == nil {
+		return
+	}
+	full := m.dragFull
+	if m.drag.vertical {
+		if full.w > 0 {
+			m.drag.ratio = clampFloat(float64(localX-full.x)/float64(full.w), 0.1, 0.9)
+		}
+	} else {
+		if full.h > 0 {
+			m.drag.ratio = clampFloat(float64(localY-full.y)/float64(full.h), 0.1, 0.9)
+		}
+	}
+	if currentSpace := m.currentSpace(); currentSpace != nil {
+		m.resizePanes(currentSpace)
+	}
+}
+
+func (m *Model) focusPane(owner *space, target *pane) {
+	for tabIndex, currentTab := range owner.tabs {
+		for index, current := range currentTab.panes {
+			if current == target {
+				owner.active = tabIndex
+				currentTab.selected = index
+				return
+			}
+		}
+	}
+}
+
+// sidebarRow is one clickable line of the sidebar. kind is "", "space",
+// "pane", or "new". The render and the mouse hit test share this layout so
+// they can never drift apart.
+type sidebarRow struct {
+	label string
+	kind  string
+	space int
+	pane  int
+}
+
+// paneBusy reports whether a running agent pane is currently working, based
+// on the braille spinner these TUIs render during a turn.
+func paneBusy(currentPane *pane) bool {
+	return isAgentKind(currentPane.kind) && currentPane.running &&
+		currentPane.term != nil && currentPane.term.HasSpinner()
+}
+
+func (m Model) paneIcon(currentPane *pane) string {
+	if currentPane.failure != "" {
+		return styleDotOff.Render("!")
+	}
+	if paneBusy(currentPane) {
+		return styleDotBusy.Render(spinnerFrames[m.spinFrame])
+	}
+	if currentPane.running {
+		return styleDotOn.Render("●")
+	}
+	if currentPane.term == nil {
+		return stylePaneDim.Render("○")
+	}
+	return styleDotOff.Render("○")
+}
+
+func (m Model) sidebarRows() []sidebarRow {
+	// Leading blank row gives the same breathing room as the left margin.
+	rows := []sidebarRow{
+		{},
+		{label: " " + styleSection.Render("WORKSPACES")},
+	}
+
+	for spaceIndex, currentSpace := range m.spaces {
+		style := styleSpaceDim
+		marker := "  "
+		if spaceIndex == m.selected {
+			style = styleSpaceSel
+			marker = " " + styleSpaceSel.Render("▍")
+		}
+		label := marker + style.Render(truncate(currentSpace.name, sidebarWidth-4))
+		rows = append(rows, sidebarRow{
+			label: label,
+			kind:  "space", space: spaceIndex, pane: -1,
+		})
+		if branch := m.gitBranch(currentSpace.cwd); branch.value != "" {
+			suffixWidth := 0
+			suffix := ""
+			if branch.ahead > 0 {
+				text := fmt.Sprintf(" ↑%d", branch.ahead)
+				suffix += styleDotOn.Render(text)
+				suffixWidth += lipgloss.Width(text)
+			}
+			if branch.behind > 0 {
+				text := fmt.Sprintf(" ↓%d", branch.behind)
+				suffix += lipgloss.NewStyle().Foreground(colorAlt).Render(text)
+				suffixWidth += lipgloss.Width(text)
+			}
+			rows = append(rows, sidebarRow{
+				label: "    " + stylePaneDim.Render(truncate(branch.value, sidebarWidth-6-suffixWidth)) + suffix,
+				kind:  "space", space: spaceIndex, pane: -1,
+			})
+		}
+		flat := 0
+		for _, currentTab := range currentSpace.tabs {
+			for _, currentPane := range currentTab.panes {
+				selected := spaceIndex == m.selected &&
+					currentTab == currentSpace.tabs[currentSpace.active] &&
+					currentTab.panes[currentTab.selected] == currentPane
+				name := truncate(currentPane.name, sidebarWidth-10)
+				nameLabel := stylePaneDim.Render(name)
+				if selected {
+					nameLabel = stylePaneSel.Render(name)
+				}
+				rows = append(rows, sidebarRow{
+					label: "    " + m.paneIcon(currentPane) + " " + nameLabel,
+					kind:  "pane", space: spaceIndex, pane: flat,
+				})
+				flat++
+			}
+		}
+	}
+
+	rows = append(rows,
+		sidebarRow{},
+		sidebarRow{label: " " + styleNewButton.Render("+ new workspace"), kind: "new", space: -1, pane: -1},
+		sidebarRow{},
+		sidebarRow{label: " " + styleSection.Render("AGENTS")},
+	)
+
+	for spaceIndex, currentSpace := range m.spaces {
+		flat := -1
+		for _, currentTab := range currentSpace.tabs {
+			for _, currentPane := range currentTab.panes {
+				flat++
+				if !isAgentKind(currentPane.kind) {
+					continue
+				}
+				// Only abnormal states get a word; the spinner already
+				// tells working apart from idle.
+				stateLabel := ""
+				switch {
+				case currentPane.failure != "":
+					stateLabel = " " + styleDotOff.Render("failed")
+				case !currentPane.running && currentPane.term != nil:
+					stateLabel = " " + styleDotOff.Render("exited")
+				case currentPane.term == nil:
+					stateLabel = " " + stylePaneDim.Render("starting")
+				}
+				name := truncate(currentPane.name, sidebarWidth-6)
+				nameLabel := stylePaneDim.Render(name)
+				if spaceIndex == m.selected && m.currentPane() == currentPane {
+					nameLabel = stylePaneSel.Render(name)
+				}
+				rows = append(rows, sidebarRow{
+					label: "  " + m.paneIcon(currentPane) + " " + nameLabel + stateLabel,
+					kind:  "pane", space: spaceIndex, pane: flat,
+				})
+				rows = append(rows, sidebarRow{
+					label: "      " + stylePaneDim.Render(truncate(currentSpace.name, sidebarWidth-7)),
+					kind:  "pane", space: spaceIndex, pane: flat,
+				})
+			}
+		}
+	}
+	return rows
+}
+
+// sidebarHit maps a body row (header already subtracted) to a sidebar
+// entry, accounting for the sidebar scroll offset.
+func (m Model) sidebarHit(y int) (kind string, index, sub int) {
+	rows := m.sidebarRows()
+	y += m.sidebarOffset(len(rows))
+	if y < 0 || y >= len(rows) {
+		return "", -1, -1
+	}
+	hit := rows[y]
+	return hit.kind, hit.space, hit.pane
+}
+
+// sidebarOffset clamps the scroll offset to the overflow of the row list.
+func (m Model) sidebarOffset(total int) int {
+	height := max(3, m.height-2)
+	return clampInt(m.sideScroll, 0, max(0, total-height))
+}
+
+func (m Model) View() string {
+	if m.width == 0 || m.height == 0 {
+		return "starting hrdx..."
+	}
+
+	header := m.renderHeader()
+	sidebar := m.renderSidebar()
+	right := m.renderTabBar() + "\n" + m.renderTerminal()
+	body := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, right)
+	if m.mode == modeMenu {
+		rows := strings.Split(body, "\n")
+		m.overlayMenu(rows)
+		body = strings.Join(rows, "\n")
+	}
+	footer := m.renderFooter()
+	return header + "\n" + body + "\n" + footer
+}
+
+// tabCell describes one clickable region of the tab bar in local x cells.
+type tabCell struct {
+	from, to int // inclusive-exclusive
+	index    int // tab index, -1 for the + button
+}
+
+func (m Model) tabCells(target *space) []tabCell {
+	cells := make([]tabCell, 0, len(target.tabs)+1)
+	x := 0
+	for index, currentTab := range target.tabs {
+		label := m.tabLabel(currentTab, index)
+		width := lipgloss.Width(label)
+		cells = append(cells, tabCell{from: x, to: x + width, index: index})
+		x += width
+	}
+	cells = append(cells, tabCell{from: x, to: x + 3, index: -1})
+	return cells
+}
+
+func (m Model) tabLabel(target *tab, index int) string {
+	name := target.name
+	if name == "" {
+		name = fmt.Sprintf("%d", index+1)
+	}
+	return " " + truncate(name, 16) + " "
+}
+
+// tabHit maps a local x on the tab bar to a tab index or the + button.
+func (m *Model) tabHit(target *space, x int) (index int, isNew bool) {
+	for _, cell := range m.tabCells(target) {
+		if x >= cell.from && x < cell.to {
+			if cell.index == -1 {
+				return -1, true
+			}
+			return cell.index, false
+		}
+	}
+	return -1, false
+}
+
+func (m Model) renderTabBar() string {
+	currentSpace := m.currentSpace()
+	width := max(1, m.width-sidebarWidth-1)
+	if currentSpace == nil {
+		return styleTabBar.Render(strings.Repeat(" ", width))
+	}
+	var out strings.Builder
+	used := 0
+	for index, currentTab := range currentSpace.tabs {
+		label := m.tabLabel(currentTab, index)
+		if index == currentSpace.active {
+			out.WriteString(styleTabActive.Render(label))
+		} else {
+			out.WriteString(styleTabIdle.Render(label))
+		}
+		used += lipgloss.Width(label)
+	}
+	out.WriteString(styleTabIdle.Render(" + "))
+	used += 3
+	if used < width {
+		out.WriteString(styleTabBar.Render(strings.Repeat(" ", width-used)))
+	}
+	return out.String()
+}
+
+func (m Model) renderHeader() string {
+	logo := styleLogo.Render(" hrdx ")
+	title := ""
+	if currentSpace := m.currentSpace(); currentSpace != nil {
+		title = styleBarText.Render(" " + currentSpace.name)
+		if current := m.currentPane(); current != nil {
+			title += styleBarMuted.Render("  " + current.name)
+		}
+	}
+	right := ""
+	if currentSpace := m.currentSpace(); currentSpace != nil {
+		right = styleBarMuted.Render(shortenPath(currentSpace.cwd) + " ")
+	}
+	gap := m.width - lipgloss.Width(logo) - lipgloss.Width(title) - lipgloss.Width(right)
+	if gap < 0 {
+		gap = 0
+	}
+	return logo + title + styleBar.Render(strings.Repeat(" ", gap)) + right
+}
+
+func (m Model) renderSidebar() string {
+	source := m.sidebarRows()
+	offset := m.sidebarOffset(len(source))
+	rows := make([]string, 0, len(source))
+	for _, current := range source[offset:] {
+		rows = append(rows, current.label)
+	}
+
+	height := max(3, m.height-2)
+	for len(rows) < height {
+		rows = append(rows, "")
+	}
+	rows = rows[:height]
+
+	// Overflow markers so hidden rows are discoverable.
+	if offset > 0 {
+		rows[0] = " " + stylePaneDim.Render("↑ more")
+	}
+	if offset < len(source)-height {
+		rows[height-1] = " " + stylePaneDim.Render("↓ more")
+	}
+	return lipgloss.NewStyle().
+		Width(sidebarWidth).
+		Height(height).
+		Border(lipgloss.ThickBorder(), false, true, false, false).
+		BorderForeground(colorFaint).
+		Render(strings.Join(rows, "\n"))
+}
+
+// renderTerminal composes the active tab's pane screens into one text block
+// matching terminalArea.
+func (m Model) renderTerminal() string {
+	area := m.terminalArea()
+	currentSpace := m.currentSpace()
+	if currentSpace == nil || currentSpace.tab().layout == nil {
+		return lipgloss.NewStyle().Padding(1, 2).Width(area.w).Height(area.h).
+			Render(styleMuted.Render("no panes. ctrl+b w opens a new workspace."))
+	}
+
+	panes, _ := m.layoutAll(currentSpace.tab())
+	focused := m.currentPane()
+
+	// segments[row] holds (x, text) fragments that tile the row.
+	type segment struct {
+		x    int
+		text string
+	}
+	segments := make([][]segment, area.h)
+
+	for _, pr := range panes {
+		isFocused := pr.pane == focused
+		lines := m.paneLines(pr, isFocused, isFocused && m.mode == modeTerminal)
+		for i := 0; i < pr.r.h && pr.r.y+i < area.h; i++ {
+			line := ""
+			if i < len(lines) {
+				line = lines[i]
+			}
+			segments[pr.r.y+i] = append(segments[pr.r.y+i], segment{pr.r.x, line})
+		}
+	}
+
+	rows := make([]string, area.h)
+	for y := 0; y < area.h; y++ {
+		row := segments[y]
+		for i := 1; i < len(row); i++ {
+			for j := i; j > 0 && row[j-1].x > row[j].x; j-- {
+				row[j-1], row[j] = row[j], row[j-1]
+			}
+		}
+		var out strings.Builder
+		for _, seg := range row {
+			out.WriteString(seg.text)
+		}
+		rows[y] = out.String()
+	}
+	return strings.Join(rows, "\n")
+}
+
+// overlayMenu draws the context menu box over the composed rows.
+func (m Model) overlayMenu(rows []string) {
+	box := m.menuAt
+	border := lipgloss.NewStyle().Foreground(colorAccent)
+	normal := lipgloss.NewStyle().Background(colorBarBg).Foreground(colorBarFg)
+	active := lipgloss.NewStyle().Background(colorAccent).Foreground(colorInk).Bold(true)
+
+	innerW := box.w - 2
+	lines := make([]string, 0, box.h)
+	lines = append(lines, border.Render("╭"+strings.Repeat("─", innerW)+"╮"))
+	for index, item := range m.menuItems() {
+		label := " " + item.label + strings.Repeat(" ", max(0, innerW-len(item.label)-1))
+		style := normal
+		if index == m.menuIndex {
+			style = active
+		}
+		lines = append(lines, border.Render("│")+style.Render(label)+border.Render("│"))
+	}
+	lines = append(lines, border.Render("╰"+strings.Repeat("─", innerW)+"╯"))
+
+	for i, line := range lines {
+		y := box.y + i
+		if y < 0 || y >= len(rows) {
+			continue
+		}
+		rows[y] = overlayAt(rows[y], line, box.x, box.w)
+	}
+}
+
+// overlayAt replaces the cells [x, x+width) of an ANSI row with overlay.
+func overlayAt(row, overlay string, x, width int) string {
+	left := ansiCut(row, 0, x)
+	right := ansiCut(row, x+width, -1)
+	return left + "\x1b[0m" + overlay + "\x1b[0m" + right
+}
+
+// ansiCut returns the cells [from, to) of an ANSI string preserving the
+// escape state. to == -1 means to the end.
+func ansiCut(value string, from, to int) string {
+	var out strings.Builder
+	col := 0
+	inEscape := false
+	var escape strings.Builder
+	for _, r := range value {
+		if inEscape {
+			escape.WriteRune(r)
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+				inEscape = false
+				out.WriteString(escape.String())
+				escape.Reset()
+			}
+			continue
+		}
+		if r == 0x1b {
+			inEscape = true
+			escape.WriteRune(r)
+			continue
+		}
+		visible := col >= from && (to < 0 || col < to)
+		if visible {
+			out.WriteRune(r)
+		}
+		col++
+	}
+	return out.String()
+}
+
+// paneLines returns exactly r.h display lines for a pane, each r.w cells
+// wide, framed by the pane's own border. The focused pane gets an accent
+// border.
+func (m Model) paneLines(pr paneRect, focused, showCursor bool) []string {
+	target := pr.pane
+	inner := pr.r.inner()
+
+	var content []string
+	switch {
+	case target.failure != "":
+		content = placeholderLines(inner, styleError.Render(truncate("failed: "+target.failure, inner.w)))
+	case target.term == nil:
+		content = placeholderLines(inner, styleMuted.Render(truncate("starting "+target.name+"...", inner.w)))
+	default:
+		content = target.term.RenderLines(showCursor)
+	}
+	for len(content) < inner.h {
+		content = append(content, strings.Repeat(" ", inner.w))
+	}
+	content = content[:inner.h]
+
+	// The pane's PTY size can lag behind the layout for a frame (splits,
+	// tab switches, drags). Clip and pad every line to exactly inner.w
+	// cells so the row compositor never drifts.
+	for i, line := range content {
+		visible := lipgloss.Width(line)
+		switch {
+		case visible > inner.w:
+			content[i] = ansiCut(line, 0, inner.w) + "\x1b[0m"
+		case visible < inner.w:
+			content[i] = line + strings.Repeat(" ", inner.w-visible)
+		}
+	}
+
+	borderStyle := lipgloss.NewStyle().Foreground(colorFaint)
+	if focused {
+		borderStyle = lipgloss.NewStyle().Foreground(colorAccent)
+	}
+
+	horizontal := strings.Repeat("─", max(0, pr.r.w-2))
+	title := " " + truncate(target.name, max(0, pr.r.w-6)) + " "
+	top := "╭" + title + strings.Repeat("─", max(0, pr.r.w-2-lipgloss.Width(title))) + "╮"
+	bottom := "╰" + horizontal + "╯"
+	side := borderStyle.Render("│")
+
+	lines := make([]string, 0, pr.r.h)
+	lines = append(lines, borderStyle.Render(top))
+	for _, row := range content {
+		lines = append(lines, side+row+side)
+	}
+	lines = append(lines, borderStyle.Render(bottom))
+	return lines
+}
+
+func placeholderLines(r rect, message string) []string {
+	lines := make([]string, r.h)
+	blank := strings.Repeat(" ", r.w)
+	for i := range lines {
+		lines[i] = blank
+	}
+	if r.h > 0 {
+		pad := max(0, r.w-lipgloss.Width(message))
+		lines[0] = " " + message + strings.Repeat(" ", max(0, pad-1))
+	}
+	return lines
+}
+
+func (m Model) renderFooter() string {
+	var badge, body string
+	switch m.mode {
+	case modeNewSpace:
+		badge = styleBadgeInput.Render(" NEW WORKSPACE ")
+		body = styleBarText.Render(" " + m.input.View())
+		if len(m.completions) > 0 {
+			var hints []string
+			for index, candidate := range m.completions {
+				name := filepath.Base(candidate)
+				if index == m.completion {
+					hints = append(hints, styleBarText.Render("["+name+"]"))
+				} else {
+					hints = append(hints, styleBarMuted.Render(name))
+				}
+			}
+			body += styleBarMuted.Render("  ") + strings.Join(hints, styleBarMuted.Render("  "))
+		}
+	case modeRename:
+		badge = styleBadgeInput.Render(" RENAME ")
+		body = styleBarText.Render(" " + m.input.View())
+	case modeMenu:
+		badge = styleBadgePrefix.Render(" MENU ")
+		body = styleBarMuted.Render(" click or arrows + enter, esc closes")
+	case modePrefix:
+		badge = styleBadgePrefix.Render(" CTRL+B ")
+		body = m.prefixHints(m.width - lipgloss.Width(badge))
+	default:
+		badge = styleBadgeTerm.Render(" TERM ")
+		body = styleBarMuted.Render(" ctrl+b commands")
+		if current := m.currentPane(); current != nil && current.term != nil {
+			if offset := current.term.ScrollOffset(); offset > 0 {
+				badge = styleBadgePrefix.Render(" SCROLL ")
+				body = styleBarText.Render(fmt.Sprintf(" %d lines back ", offset)) +
+					styleBarMuted.Render(" wheel down or type to return")
+			}
+		}
+	}
+	if m.status != "" {
+		body += styleBarError.Render("  " + m.status)
+	}
+	gap := m.width - lipgloss.Width(badge) - lipgloss.Width(body)
+	if gap < 0 {
+		gap = 0
+	}
+	return badge + body + styleBar.Render(strings.Repeat(" ", gap))
+}
+
+var prefixHintList = [][2]string{
+	{"c/C", "split"},
+	{"a", "agent"},
+	{"s/S", "shell"},
+	{"w", "workspace"},
+	{"t", "tab"},
+	{"n/p", "tabs"},
+	{"[/]", "switch"},
+	{"r", "rename"},
+	{"=", "equal"},
+	{"u/d", "scroll"},
+	{"x/X", "close"},
+	{"q", "quit"},
+}
+
+// prefixHints renders the ctrl+b key hints, fitting as many as the given
+// width allows, starting at the hint scroll offset. Ellipses on either
+// side mark clipped hints; left/right arrows move the window.
+func (m Model) prefixHints(width int) string {
+	start := clampInt(m.hintScroll, 0, len(prefixHintList)-1)
+	var out strings.Builder
+	used := 0
+	if start > 0 {
+		out.WriteString(styleBarMuted.Render(" ‹"))
+		used += 2
+	}
+	for index := start; index < len(prefixHintList); index++ {
+		hint := prefixHintList[index]
+		cellWidth := 1 + len(hint[0]) + 1 + len(hint[1]) + 1
+		reserve := 0
+		if index < len(prefixHintList)-1 {
+			reserve = 2 // room for the arrow marker when more hints follow
+		}
+		if used+cellWidth+reserve > width {
+			out.WriteString(styleBarMuted.Render(" ›"))
+			break
+		}
+		out.WriteString(styleBarMuted.Render(" " + hint[0]))
+		out.WriteString(styleBarText.Render(" " + hint[1] + " "))
+		used += cellWidth
+	}
+	return out.String()
+}
+
+func shortenPath(path string) string {
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(path, home) {
+		return "~" + strings.TrimPrefix(path, home)
+	}
+	return path
+}
+
+func (m *Model) selectSpace(delta int) {
+	if len(m.spaces) > 0 {
+		count := len(m.spaces)
+		m.selected = (m.selected + delta + count) % count
+	}
+}
+
+func (m *Model) selectTab(delta int) {
+	currentSpace := m.currentSpace()
+	if currentSpace == nil || len(currentSpace.tabs) == 0 {
+		return
+	}
+	count := len(currentSpace.tabs)
+	currentSpace.active = (currentSpace.active + delta + count) % count
+	m.resizePanes(currentSpace)
+}
+
+func (m *Model) closeCurrentPane() {
+	currentSpace := m.currentSpace()
+	if currentSpace == nil {
+		return
+	}
+	currentTab := currentSpace.tab()
+	if len(currentTab.panes) == 0 {
+		return
+	}
+	current := currentTab.panes[currentTab.selected]
+	if current.term != nil {
+		current.term.Close()
+	}
+	removeAt(&currentTab.layout, current)
+	currentTab.panes = append(currentTab.panes[:currentTab.selected], currentTab.panes[currentTab.selected+1:]...)
+	if currentTab.selected >= len(currentTab.panes) {
+		currentTab.selected = max(0, len(currentTab.panes)-1)
+	}
+	// Dropping the last pane closes the tab too, unless it is the only one.
+	if len(currentTab.panes) == 0 && len(currentSpace.tabs) > 1 {
+		m.closeTab(currentSpace, currentTab)
+	}
+	m.resizePanes(currentSpace)
+	m.persist()
+}
+
+func (m *Model) closeTab(owner *space, target *tab) {
+	for _, currentPane := range target.panes {
+		if currentPane.term != nil {
+			currentPane.term.Close()
+		}
+	}
+	for index, currentTab := range owner.tabs {
+		if currentTab == target {
+			owner.tabs = append(owner.tabs[:index], owner.tabs[index+1:]...)
+			break
+		}
+	}
+	owner.active = clampInt(owner.active, 0, max(0, len(owner.tabs)-1))
+}
+
+func (m *Model) closeCurrentSpace() {
+	if len(m.spaces) == 0 {
+		return
+	}
+	for _, currentTab := range m.spaces[m.selected].tabs {
+		for _, currentPane := range currentTab.panes {
+			if currentPane.term != nil {
+				currentPane.term.Close()
+			}
+		}
+	}
+	m.spaces = append(m.spaces[:m.selected], m.spaces[m.selected+1:]...)
+	if m.selected >= len(m.spaces) {
+		m.selected = max(0, len(m.spaces)-1)
+	}
+	m.persist()
+}
+
+func (m *Model) closeAll() {
+	m.persist()
+	if m.kittyPushed {
+		// Pop while the alt screen is still active, before Bubble Tea
+		// restores the main screen.
+		_, _ = os.Stdout.WriteString(seqEnhancedKeysOff)
+		m.kittyPushed = false
+	}
+	for _, currentSpace := range m.spaces {
+		for _, currentTab := range currentSpace.tabs {
+			for _, currentPane := range currentTab.panes {
+				if currentPane.term != nil {
+					currentPane.term.Close()
+				}
+			}
+		}
+	}
+}
+
+func (m *Model) currentSpace() *space {
+	if len(m.spaces) == 0 || m.selected < 0 || m.selected >= len(m.spaces) {
+		return nil
+	}
+	return m.spaces[m.selected]
+}
+
+func (m *Model) currentPane() *pane {
+	currentSpace := m.currentSpace()
+	if currentSpace == nil {
+		return nil
+	}
+	currentTab := currentSpace.tab()
+	if len(currentTab.panes) == 0 {
+		return nil
+	}
+	currentTab.selected = clampInt(currentTab.selected, 0, len(currentTab.panes)-1)
+	return currentTab.panes[currentTab.selected]
+}
+
+func (m *Model) paneByID(id int) (*pane, *space) {
+	for _, currentSpace := range m.spaces {
+		for _, currentTab := range currentSpace.tabs {
+			for _, currentPane := range currentTab.panes {
+				if currentPane.id == id {
+					return currentPane, currentSpace
+				}
+			}
+		}
+	}
+	return nil, nil
+}
+
+func waitForUpdate(id int, updates <-chan struct{}) tea.Cmd {
+	return func() tea.Msg {
+		_, open := <-updates
+		return paneUpdateMsg{id: id, open: open}
+	}
+}
+
+func encodeSGRMouse(msg tea.MouseMsg, x, y int) []byte {
+	if x < 0 || y < 0 {
+		return nil
+	}
+	button := 0
+	switch msg.Button {
+	case tea.MouseButtonLeft:
+		button = 0
+	case tea.MouseButtonMiddle:
+		button = 1
+	case tea.MouseButtonRight:
+		button = 2
+	case tea.MouseButtonWheelUp:
+		button = 64
+	case tea.MouseButtonWheelDown:
+		button = 65
+	default:
+		return nil
+	}
+	if msg.Action == tea.MouseActionMotion {
+		button += 32
+	}
+	final := "M"
+	if msg.Action == tea.MouseActionRelease && msg.Button != tea.MouseButtonWheelUp && msg.Button != tea.MouseButtonWheelDown {
+		final = "m"
+	}
+	return []byte(fmt.Sprintf("\x1b[<%d;%d;%d%s", button, x+1, y+1, final))
+}
+
+func truncate(value string, width int) string {
+	runes := []rune(strings.ReplaceAll(value, "\n", " "))
+	if width <= 0 {
+		return ""
+	}
+	if len(runes) <= width {
+		return string(runes)
+	}
+	if width <= 1 {
+		return string(runes[:width])
+	}
+	return string(runes[:width-1]) + "…"
+}
