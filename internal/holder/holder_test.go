@@ -132,6 +132,9 @@ func TestHolderSessionSurvivesDetach(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Let the marker arrive before Attach. Output from a started but not yet
+	// subscribed session must be buffered rather than dropped.
+	time.Sleep(100 * time.Millisecond)
 	var out1 collector
 	if _, err := first.Attach(session, 80, 24, out1.sink); err != nil {
 		t.Fatal(err)

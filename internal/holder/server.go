@@ -47,6 +47,7 @@ type Server struct {
 	sessions map[int64]*session
 	nextID   int64
 	client   net.Conn // current attached client, nil when detached
+	attached map[int64]bool
 	clientMu sync.Mutex
 
 	listener net.Listener
@@ -60,6 +61,7 @@ func NewServer(socket, version string) *Server {
 		version:  version,
 		sessions: map[int64]*session{},
 		nextID:   1,
+		attached: map[int64]bool{},
 		done:     make(chan struct{}),
 	}
 }
@@ -105,12 +107,14 @@ func (s *Server) serveClient(conn net.Conn) {
 		_ = s.client.Close()
 	}
 	s.client = conn
+	s.attached = map[int64]bool{}
 	s.clientMu.Unlock()
 
 	defer func() {
 		s.clientMu.Lock()
 		if s.client == conn {
 			s.client = nil
+			s.attached = map[int64]bool{}
 		}
 		s.clientMu.Unlock()
 		_ = conn.Close()
@@ -167,14 +171,18 @@ func (s *Server) handle(req request) response {
 		if req.Cols > 1 && req.Rows > 1 && target.running.Load() {
 			_ = pty.Setsize(target.ptmx, &pty.Winsize{Cols: uint16(req.Cols), Rows: uint16(req.Rows)})
 		}
-		// Replay buffered output so the client can rebuild the screen.
+		// Subscribe before replaying buffered output. Holding the session lock
+		// keeps live PTY output from overtaking the replay.
 		target.mu.Lock()
+		s.clientMu.Lock()
+		s.attached[target.id] = true
 		replay := target.buffer.Bytes()
-		target.buffer = newRing(ringCapacity)
-		target.mu.Unlock()
-		if len(replay) > 0 {
-			s.sendToClient(frame{Type: TOut, ID: target.id, Payload: replay})
+		replayed := len(replay) == 0 || s.writeToClientLocked(frame{Type: TOut, ID: target.id, Payload: replay})
+		s.clientMu.Unlock()
+		if replayed {
+			target.buffer = newRing(ringCapacity)
 		}
+		target.mu.Unlock()
 		return response{Req: req.Req, Session: target.id, Running: target.running.Load()}
 
 	case "resize":
@@ -261,11 +269,11 @@ func (s *Server) pump(target *session) {
 		if n > 0 {
 			payload := make([]byte, n)
 			copy(payload, buffer[:n])
-			if !s.sendToClient(frame{Type: TOut, ID: target.id, Payload: payload}) {
-				target.mu.Lock()
+			target.mu.Lock()
+			if !s.sendSessionOutput(target.id, payload) {
 				target.buffer.Write(payload)
-				target.mu.Unlock()
 			}
+			target.mu.Unlock()
 		}
 		if err != nil {
 			break
@@ -276,17 +284,33 @@ func (s *Server) pump(target *session) {
 	s.sendToClient(frame{Type: TEvt, Payload: marshal(event{Event: "exited", Session: target.id})})
 }
 
-// sendToClient writes a frame to the attached client. Returns false when
-// no client is attached or the write failed.
+// sendSessionOutput writes output only after the current client has
+// subscribed to that session. Until then, pump retains it for replay.
+func (s *Server) sendSessionOutput(id int64, payload []byte) bool {
+	s.clientMu.Lock()
+	defer s.clientMu.Unlock()
+	if !s.attached[id] {
+		return false
+	}
+	return s.writeToClientLocked(frame{Type: TOut, ID: id, Payload: payload})
+}
+
+// sendToClient writes a non-session frame to the current client.
 func (s *Server) sendToClient(f frame) bool {
 	s.clientMu.Lock()
 	defer s.clientMu.Unlock()
+	return s.writeToClientLocked(f)
+}
+
+// writeToClientLocked writes while clientMu is held.
+func (s *Server) writeToClientLocked(f frame) bool {
 	if s.client == nil {
 		return false
 	}
 	if err := writeFrame(s.client, f); err != nil {
 		_ = s.client.Close()
 		s.client = nil
+		s.attached = map[int64]bool{}
 		return false
 	}
 	return true
