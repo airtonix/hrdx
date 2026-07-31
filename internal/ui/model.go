@@ -226,7 +226,20 @@ func (m Model) menuItems() []menuItem {
 	if m.menuTab != nil {
 		return tabMenuItems
 	}
+	if m.menuPane != nil {
+		if _, owner := m.paneByID(m.menuPane.id); owner != nil && spacePaneCount(owner) == 1 {
+			return paneMenuItems[:len(paneMenuItems)-1]
+		}
+	}
 	return paneMenuItems
+}
+
+func spacePaneCount(owner *space) int {
+	count := 0
+	for _, currentTab := range owner.tabs {
+		count += len(currentTab.panes)
+	}
+	return count
 }
 
 type statusExpireMsg struct{ seq int }

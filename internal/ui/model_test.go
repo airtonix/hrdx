@@ -288,6 +288,23 @@ func TestTruncate(t *testing.T) {
 	}
 }
 
+func TestPaneMenuHidesCloseForOnlyPane(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	currentSpace := model.spaces[0]
+	model.menuPane = currentSpace.tab().panes[0]
+
+	for _, item := range model.menuItems() {
+		if item.action == "close" {
+			t.Fatal("close pane should be hidden when the workspace has only one pane")
+		}
+	}
+
+	model.addPane(currentSpace, "shell", true)
+	if items := model.menuItems(); items[len(items)-1].action != "close" {
+		t.Fatal("close pane should be available when another pane is open")
+	}
+}
+
 func TestCloseCurrentPaneClamps(t *testing.T) {
 	model := newTestModel("/tmp/api")
 	currentSpace := model.spaces[0]
