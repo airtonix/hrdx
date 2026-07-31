@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 	"github.com/patriceckhart/hrdx/internal/api"
 	"github.com/patriceckhart/hrdx/internal/holder"
 	"github.com/patriceckhart/hrdx/internal/state"
@@ -2070,7 +2071,9 @@ func overlayAt(row, overlay string, x, width int) string {
 }
 
 // ansiCut returns the cells [from, to) of an ANSI string preserving the
-// escape state. to == -1 means to the end.
+// escape state. to == -1 means to the end. Wide runes count as their
+// display width; one straddling a boundary is replaced by spaces for
+// the cells inside the range, so the result's width is always exact.
 func ansiCut(value string, from, to int) string {
 	var out strings.Builder
 	col := 0
@@ -2091,11 +2094,30 @@ func ansiCut(value string, from, to int) string {
 			escape.WriteRune(r)
 			continue
 		}
-		visible := col >= from && (to < 0 || col < to)
-		if visible {
-			out.WriteRune(r)
+		width := runewidth.RuneWidth(r)
+		start := col
+		col += width
+		if width == 0 {
+			// Combining marks attach to the previous rune; keep them
+			// when that rune was inside the range.
+			if start > from && (to < 0 || start <= to) {
+				out.WriteRune(r)
+			}
+			continue
 		}
-		col++
+		if start >= from && (to < 0 || col <= to) {
+			out.WriteRune(r)
+			continue
+		}
+		// Partially visible wide rune: pad its in-range cells.
+		overlapFrom := max(start, from)
+		overlapTo := col
+		if to >= 0 {
+			overlapTo = min(col, to)
+		}
+		for i := overlapFrom; i < overlapTo; i++ {
+			out.WriteByte(' ')
+		}
 	}
 	return out.String()
 }
@@ -2122,16 +2144,22 @@ func (m Model) paneLines(pr paneRect, focused, showCursor bool) []string {
 	content = content[:inner.h]
 
 	// The pane's PTY size can lag behind the layout for a frame (splits,
-	// tab switches, drags). Clip and pad every line to exactly inner.w
-	// cells so the row compositor never drifts.
+	// tab switches, drags), and wide runes (emoji, CJK) occupy two host
+	// cells while the emulator counts one. Clip and pad every line to
+	// exactly inner.w cells so the row compositor never drifts.
 	for i, line := range content {
 		visible := lipgloss.Width(line)
-		switch {
-		case visible > inner.w:
-			content[i] = ansiCut(line, 0, inner.w) + "\x1b[0m"
-		case visible < inner.w:
-			content[i] = line + strings.Repeat(" ", inner.w-visible)
+		if visible == inner.w {
+			continue
 		}
+		if visible > inner.w {
+			line = ansiCut(line, 0, inner.w) + "\x1b[0m"
+			visible = lipgloss.Width(line)
+		}
+		if visible < inner.w {
+			line += strings.Repeat(" ", inner.w-visible)
+		}
+		content[i] = line
 	}
 
 	borderStyle := lipgloss.NewStyle().Foreground(colorFaint)

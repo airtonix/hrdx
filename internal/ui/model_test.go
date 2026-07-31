@@ -256,6 +256,29 @@ func TestResolveDirRejectsMissing(t *testing.T) {
 	}
 }
 
+func TestAnsiCutWideRunes(t *testing.T) {
+	// 4 cells of plain text.
+	if got := ansiCut("abcd", 0, 2); got != "ab" {
+		t.Fatalf("cut = %q, want ab", got)
+	}
+	// CJK: each rune is 2 cells. Cutting at 2 keeps exactly one rune.
+	if got := ansiCut("世界", 0, 2); got != "世" {
+		t.Fatalf("cut = %q, want 世", got)
+	}
+	// Cutting at 3 splits the second rune: its first cell becomes a space.
+	if got := ansiCut("世界", 0, 3); got != "世 " {
+		t.Fatalf("cut = %q, want '世 '", got)
+	}
+	// Escapes survive and do not count as cells.
+	if got := ansiCut("\x1b[31mab\x1b[0mcd", 0, 3); got != "\x1b[31mab\x1b[0mc" {
+		t.Fatalf("cut = %q", got)
+	}
+	// A from-cut starting inside a wide rune pads the tail cell.
+	if got := ansiCut("世x", 1, 3); got != " x" {
+		t.Fatalf("cut = %q, want ' x'", got)
+	}
+}
+
 func TestTruncate(t *testing.T) {
 	if got := truncate("hello world", 8); got != "hello w…" {
 		t.Fatalf("truncate = %q", got)
