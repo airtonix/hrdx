@@ -81,7 +81,7 @@ Everything is clickable: tabs, workspaces, panes, agents, menus, and the setting
 
 ## Custom harnesses
 
-Any agent CLI beyond the built-ins can be registered by dropping a `harnesses.json` next to the state file (`~/Library/Application Support/hrdx/` on macOS, `$XDG_CONFIG_HOME/hrdx/` on Linux). Registered harnesses appear everywhere the built-ins do: in the pickers, in agent cycling, in the sidebar agents list, and in the settings window for enabling and disabling.
+Any agent CLI beyond the built-ins can be registered by dropping a `harness.json` next to the state file (`~/Library/Application Support/hrdx/` on macOS, `$XDG_CONFIG_HOME/hrdx/` on Linux). Registered harnesses appear everywhere the built-ins do: in the pickers, in agent cycling, in the sidebar agents list, and in the settings window for enabling and disabling.
 
 ```json
 [

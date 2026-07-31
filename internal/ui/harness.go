@@ -9,11 +9,11 @@ import (
 )
 
 // Custom harnesses extend the built-in agent list with user-defined coding
-// agent CLIs. They are declared in harnesses.json next to the state file
+// agent CLIs. They are declared in harness.json next to the state file
 // and behave like built-ins everywhere: pickers, cycling, the sidebar
 // agents section, settings toggles, resume-on-restore, and busy tracking.
 
-const harnessFile = "harnesses.json"
+const harnessFile = "harness.json"
 
 // harnessSpec is the JSON shape of one custom harness entry.
 type harnessSpec struct {
@@ -36,7 +36,7 @@ type harnessSpec struct {
 	Busy string `json:"busy,omitempty"`
 }
 
-// loadHarnesses reads harnesses.json from dir and registers every valid
+// loadHarnesses reads harness.json from dir and registers every valid
 // entry. A missing file is fine. Returns a description of what was
 // skipped or failed, or "" when everything loaded.
 func loadHarnesses(dir string) string {

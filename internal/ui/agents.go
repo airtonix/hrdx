@@ -6,7 +6,7 @@ import (
 )
 
 // agentSpec describes one supported coding agent CLI, built in or
-// registered as a custom harness from harnesses.json.
+// registered as a custom harness from harness.json.
 type agentSpec struct {
 	kind        string
 	binary      string   // default binary name on $PATH
@@ -14,7 +14,7 @@ type agentSpec struct {
 	resume      []string // args that resume the latest session
 	resumeFirst bool     // resume args are a subcommand and must come first
 	busyMatch   string   // screen substring visible while working; "" = spinner
-	custom      bool     // registered from harnesses.json
+	custom      bool     // registered from harness.json
 }
 
 // agentSpecs lists the supported agents in menu/cycle order.
