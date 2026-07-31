@@ -72,6 +72,46 @@ func TestScrollbackAndSelection(t *testing.T) {
 	}
 }
 
+func TestPaneEnv(t *testing.T) {
+	t.Setenv("KITTY_WINDOW_ID", "7")
+	t.Setenv("TERM_PROGRAM", "ghostty")
+	t.Setenv("TERM", "xterm-kitty")
+	t.Setenv("HRDX", "stale")
+	t.Setenv("MY_APP_SETTING", "kept")
+
+	env := paneEnv()
+	got := map[string]string{}
+	for _, entry := range env {
+		key, value, _ := strings.Cut(entry, "=")
+		got[key] = value
+	}
+	if got["TERM"] != "xterm-256color" {
+		t.Fatalf("TERM = %q, want xterm-256color", got["TERM"])
+	}
+	if got["TERM_PROGRAM"] != "vscode" {
+		t.Fatalf("TERM_PROGRAM = %q, want vscode", got["TERM_PROGRAM"])
+	}
+	if got["HRDX"] != "1" {
+		t.Fatalf("HRDX = %q, want 1", got["HRDX"])
+	}
+	if _, ok := got["KITTY_WINDOW_ID"]; ok {
+		t.Fatal("KITTY_WINDOW_ID must be scrubbed")
+	}
+	if got["MY_APP_SETTING"] != "kept" {
+		t.Fatal("unrelated variables must survive")
+	}
+	// No duplicate keys: the appended values must be the only ones.
+	count := 0
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "TERM=") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("TERM appears %d times, want 1", count)
+	}
+}
+
 func TestHasScreenText(t *testing.T) {
 	pane := startShellPane(t, "echo working on it")
 	waitExit(t, pane)

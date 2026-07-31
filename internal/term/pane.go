@@ -56,7 +56,7 @@ func Start(command string, args []string, cwd string, cols, rows int) (*Pane, er
 
 	cmd := exec.Command(command, args...)
 	cmd.Dir = cwd
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	cmd.Env = paneEnv()
 
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
 	if err != nil {
@@ -71,6 +71,41 @@ func Start(command string, args []string, cwd string, cols, rows int) (*Pane, er
 	}
 	go pane.reader()
 	return pane, nil
+}
+
+// paneEnv builds the environment for pane subprocesses. The outer
+// terminal's identity is scrubbed so children never detect capabilities
+// (like inline images) that hrdx's character-grid panes cannot deliver;
+// TERM_PROGRAM=vscode makes capability-sniffing TUIs fall back to their
+// conservative rendering path. HRDX=1 announces the multiplexer, like
+// TMUX does, so tools can detect they run inside hrdx.
+func paneEnv() []string {
+	drop := []string{
+		"TERM=", "TERM_PROGRAM=", "TERM_PROGRAM_VERSION=",
+		"KITTY_WINDOW_ID=", "KITTY_PID=", "KITTY_PUBLIC_KEY=", "KITTY_INSTALLATION_DIR=", "KITTY_LISTEN_ON=",
+		"GHOSTTY_RESOURCES_DIR=", "GHOSTTY_BIN_DIR=", "GHOSTTY_SHELL_FEATURES=",
+		"WEZTERM_EXECUTABLE=", "WEZTERM_PANE=", "WEZTERM_CONFIG_FILE=", "WEZTERM_CONFIG_DIR=", "WEZTERM_UNIX_SOCKET=", "WEZTERM_EXECUTABLE_DIR=",
+		"ITERM_PROFILE=", "ITERM_SESSION_ID=",
+		"HRDX=",
+	}
+	var env []string
+	for _, entry := range os.Environ() {
+		skip := false
+		for _, prefix := range drop {
+			if strings.HasPrefix(entry, prefix) {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			env = append(env, entry)
+		}
+	}
+	return append(env,
+		"TERM=xterm-256color",
+		"TERM_PROGRAM=vscode",
+		"HRDX=1",
+	)
 }
 
 // Updates delivers a signal whenever the screen content changed. The channel
