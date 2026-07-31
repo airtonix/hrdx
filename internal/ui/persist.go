@@ -153,5 +153,6 @@ func (m *Model) persist() {
 	}
 	if err := state.Save(m.statePath, m.snapshot()); err != nil {
 		m.status = "state save failed: " + err.Error()
+		m.statusIsInfo = false
 	}
 }

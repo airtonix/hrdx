@@ -19,6 +19,7 @@ var (
 	styleBarMuted = lipgloss.NewStyle().Background(colorBarBg).Foreground(colorMuted)
 	styleBarText  = lipgloss.NewStyle().Background(colorBarBg).Foreground(colorBarFg)
 	styleBarError = lipgloss.NewStyle().Background(colorBarBg).Foreground(colorBad).Bold(true)
+	styleBarInfo  = lipgloss.NewStyle().Background(colorBarBg).Foreground(colorAccent).Bold(true)
 	styleLogo     = lipgloss.NewStyle().Background(colorAccent).Foreground(colorInk).Bold(true)
 
 	styleBadgeTerm = lipgloss.NewStyle().Background(colorFaint).Foreground(colorBarFg).Bold(true)

@@ -120,6 +120,7 @@ type Model struct {
 	mode          inputMode
 	input         textinput.Model
 	status        string
+	statusIsInfo  bool // status is a notice, not an error: accent styling
 	kittyPushed   bool
 	drag          *splitNode
 	dragFull      rect
@@ -179,12 +180,22 @@ func (m Model) menuItems() []menuItem {
 
 type statusExpireMsg struct{ seq int }
 
-// flashStatus shows a footer message that clears after two seconds.
+// flashStatus shows an error message in the footer that clears after two
+// seconds.
 func (m *Model) flashStatus(text string) tea.Cmd {
 	m.status = text
+	m.statusIsInfo = false
 	m.statusSeq++
 	seq := m.statusSeq
 	return tea.Tick(2*time.Second, func(time.Time) tea.Msg { return statusExpireMsg{seq: seq} })
+}
+
+// flashInfo is flashStatus for non-error notices (copies, agent cycling);
+// it renders in the accent color instead of error red.
+func (m *Model) flashInfo(text string) tea.Cmd {
+	cmd := m.flashStatus(text)
+	m.statusIsInfo = true
+	return cmd
 }
 
 // soundConfirmMsg fires a moment after a pane went from busy to idle; the
@@ -806,7 +817,7 @@ func (m Model) runPrefix(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.openKindPicker("split-down", nil, "", rect{x: sidebarWidth + 2, y: 1})
 	case "a":
 		m.cycleAgent()
-		return m, m.flashStatus("default agent: " + m.config.DefaultAgent)
+		return m, m.flashInfo("default agent: " + m.config.DefaultAgent)
 	case "s", "%", "|":
 		return m.splitCurrent("shell", true)
 	case "S", "\"", "-":
@@ -1354,7 +1365,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					m.selPane.term.ClearSelection()
 				} else {
 					copyToClipboard(text)
-					flash = m.flashStatus(fmt.Sprintf("copied %d chars", len([]rune(text))))
+					flash = m.flashInfo(fmt.Sprintf("copied %d chars", len([]rune(text))))
 				}
 			}
 			m.selPane = nil
@@ -2112,7 +2123,11 @@ func (m Model) renderFooter() string {
 		}
 	}
 	if m.status != "" {
-		body += styleBarError.Render("  " + m.status)
+		style := styleBarError
+		if m.statusIsInfo {
+			style = styleBarInfo
+		}
+		body += style.Render("  " + m.status)
 	}
 	gap := m.width - lipgloss.Width(badge) - lipgloss.Width(body)
 	if gap < 0 {
