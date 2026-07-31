@@ -160,7 +160,10 @@ func ringBell() {
 }
 
 // playSound plays the configured notification sound in the background
-// through an OS audio player, with the terminal bell as last resort.
+// through an OS audio player. Players occasionally fail transiently
+// (device switching, coreaudio hiccups), so each is retried once and
+// the macOS system beep serves as a further fallback before the
+// terminal bell.
 func playSound(kind string) {
 	file := soundFile(kind)
 	go func() {
@@ -175,9 +178,17 @@ func playSound(kind string) {
 				if err != nil {
 					continue
 				}
-				if exec.Command(path, player[1:]...).Run() == nil {
-					return
+				for attempt := 0; attempt < 2; attempt++ {
+					if exec.Command(path, player[1:]...).Run() == nil {
+						return
+					}
 				}
+			}
+		}
+		// macOS system beep, honoring the user's alert sound.
+		if path, err := exec.LookPath("osascript"); err == nil {
+			if exec.Command(path, "-e", "beep").Run() == nil {
+				return
 			}
 		}
 		_, _ = os.Stdout.WriteString("\a")
