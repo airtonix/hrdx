@@ -198,6 +198,47 @@ func (p *Pane) HasSpinner() bool {
 	return false
 }
 
+// HasScreenText reports whether the visible screen contains the given
+// substring, ignoring styling. Rows are matched individually with runs of
+// nulls/spaces collapsed, so cell padding does not break the match.
+func (p *Pane) HasScreenText(needle string) bool {
+	if needle == "" {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.exited {
+		return false
+	}
+	p.vt.Lock()
+	defer p.vt.Unlock()
+	cols, rows := p.vt.Size()
+	var row bytes.Buffer
+	for y := 0; y < rows; y++ {
+		row.Reset()
+		lastSpace := false
+		for x := 0; x < cols; x++ {
+			char := p.vt.Cell(x, y).Char
+			if char == 0 {
+				char = ' '
+			}
+			if char == ' ' {
+				if lastSpace {
+					continue
+				}
+				lastSpace = true
+			} else {
+				lastSpace = false
+			}
+			row.WriteRune(char)
+		}
+		if strings.Contains(row.String(), needle) {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *Pane) notify() {
 	select {
 	case p.updates <- struct{}{}:

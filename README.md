@@ -9,6 +9,7 @@ hrdx is a minimal and lightweight terminal multiplexer built for the agent era: 
 - **Feels like your terminal.** Scrollback, mouse selection with clipboard copy, drag-to-resize splits, drag-to-reorder workspaces, right-click context menus, and kitty keyboard protocol pass-through so even exotic chords like ctrl+1 reach your agent.
 - **Picks up where you left off.** Workspaces, tabs, splits, and ratios survive restarts. Agent panes relaunch resuming their latest session for that project, automatically.
 - **Yours to tune.** A settings window (`ctrl+b ,` or the gear in the sidebar) lets you switch individual agents on or off and enable a notification sound when an agent finishes its turn. All persisted.
+- **Bring your own agent.** Register any agent CLI as a custom harness via a small JSON file, including its own busy detection for the sidebar spinner and finish sound. It shows up in pickers, cycling, and settings like the built-ins. See [Custom harnesses](#custom-harnesses).
 
 ## Install
 
@@ -77,6 +78,32 @@ All keys go to the focused terminal, except the `ctrl+b` prefix (tmux style):
 ## Mouse
 
 Everything is clickable: tabs, workspaces, panes, agents, menus, and the settings entry at the bottom of the sidebar. Drag workspaces to reorder them, drag pane borders to resize, right-click for context menus, and drag with the left button to select text (copied straight to your clipboard). Wheel events go to the pane under the cursor: agent TUIs scroll themselves, shells scroll their local history, and `shift+pgup` / `shift+pgdn` do the same from the keyboard.
+
+## Custom harnesses
+
+Any agent CLI beyond the built-ins can be registered by dropping a `harnesses.json` next to the state file (`~/Library/Application Support/hrdx/` on macOS, `$XDG_CONFIG_HOME/hrdx/` on Linux). Registered harnesses appear everywhere the built-ins do: in the pickers, in agent cycling, in the sidebar agents list, and in the settings window for enabling and disabling.
+
+```json
+[
+  {
+    "kind": "aider",
+    "binary": "aider",
+    "args": ["--no-auto-commits"],
+    "resume": ["--restore-chat-history"],
+    "busy": "Waiting for the model"
+  },
+  { "kind": "goose" }
+]
+```
+
+| Field | Purpose |
+|---|---|
+| `kind` | Identifier used in pickers and pane names (required, must not collide with built-ins) |
+| `binary` | Executable to launch (default: same as `kind`) |
+| `args` | Extra arguments passed on every launch |
+| `resume` | Arguments that resume the latest session when a restored pane relaunches |
+| `resume_first` | Put the resume args before `args` (for subcommands like `resume --last`) |
+| `busy` | A substring visible on screen only while the harness is working; drives the busy spinner and the finish sound. Empty: braille spinner detection, like the built-ins |
 
 ## Persistence
 

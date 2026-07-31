@@ -49,6 +49,9 @@ func (m Model) settingsRows() []settingsRow {
 				box = "[ ] "
 			}
 			label := box + spec.kind
+			if spec.custom {
+				label += " (custom)"
+			}
 			if !installed[spec.kind] {
 				label += " (not installed)"
 			}

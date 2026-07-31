@@ -93,7 +93,7 @@ func main() {
 	var zotBin, piBin, claudeBin, codexBin string
 	var resume, fresh bool
 	flag.Var(&cwd, "cwd", "project directory to open as a workspace (repeatable)")
-	flag.StringVar(&agent, "agent", "zot", "default agent for new panes: zot, pi, claude, codex")
+	flag.StringVar(&agent, "agent", "zot", "default agent for new panes: zot, pi, claude, codex, or a custom harness kind")
 	flag.StringVar(&provider, "provider", "", "zot provider (zot panes only)")
 	flag.StringVar(&model, "model", "", "zot model (zot panes only)")
 	flag.StringVar(&reasoning, "reasoning", "", "zot reasoning level (zot panes only)")

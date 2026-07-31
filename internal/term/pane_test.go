@@ -72,6 +72,31 @@ func TestScrollbackAndSelection(t *testing.T) {
 	}
 }
 
+func TestHasScreenText(t *testing.T) {
+	pane := startShellPane(t, "echo working on it")
+	waitExit(t, pane)
+	// The pane has exited, so HasScreenText must be false even though
+	// the text is on screen.
+	if pane.HasScreenText("working on it") {
+		t.Fatal("exited pane must not report screen text")
+	}
+
+	live := startShellPane(t, "echo busy marker; sleep 30")
+	deadline := time.Now().Add(5 * time.Second)
+	for !live.HasScreenText("busy marker") {
+		if time.Now().After(deadline) {
+			t.Fatal("screen text not found")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if live.HasScreenText("absent needle") {
+		t.Fatal("absent text must not match")
+	}
+	if live.HasScreenText("") {
+		t.Fatal("empty needle must not match")
+	}
+}
+
 func TestForegroundCommand(t *testing.T) {
 	pane := startShellPane(t, "sleep 30")
 	deadline := time.Now().Add(5 * time.Second)

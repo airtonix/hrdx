@@ -258,6 +258,12 @@ func New(config Config, paths []string, statePath string, saved state.State) Mod
 	if config.Shell == "" {
 		config.Shell = "/bin/zsh"
 	}
+	// Custom harnesses live next to the state file and must register
+	// before any kind validation below.
+	harnessProblem := ""
+	if statePath != "" {
+		harnessProblem = loadHarnesses(filepath.Dir(statePath))
+	}
 	if !isAgentKind(config.DefaultAgent) {
 		config.DefaultAgent = "zot"
 	}
@@ -267,7 +273,7 @@ func New(config Config, paths []string, statePath string, saved state.State) Mod
 
 	model := Model{config: config, input: input, nextID: 1, statePath: statePath,
 		branches: map[string]branchInfo{}, disabled: map[string]bool{},
-		wasBusy: map[int]bool{}, soundOn: saved.Sound}
+		wasBusy: map[int]bool{}, soundOn: saved.Sound, status: harnessProblem}
 	for _, kind := range saved.DisabledAgents {
 		if isAgentKind(kind) {
 			model.disabled[kind] = true
@@ -412,9 +418,9 @@ func (m Model) startPane(owner *space, target *pane) tea.Cmd {
 	args := []string{"-l"}
 	if spec := agentByKind(target.kind); spec != nil {
 		command = m.config.binaryFor(target.kind)
-		args = nil
+		args = append([]string{}, spec.args...)
 		if target.kind == "zot" {
-			args = append([]string{}, m.config.ZotArgs...)
+			args = append(args, m.config.ZotArgs...)
 		}
 		if target.resume && len(spec.resume) > 0 && !contains(args, spec.resume[0]) {
 			if spec.resumeFirst {
@@ -1532,11 +1538,18 @@ type sidebarRow struct {
 }
 
 // paneBusy reports whether a pane running an agent (agent panes, or shell
-// panes with an agent in the foreground) is currently working, based on
-// the braille spinner these TUIs render during a turn.
+// panes with an agent in the foreground) is currently working. Built-ins
+// are detected by the braille spinner their TUIs render during a turn;
+// custom harnesses can declare a busy substring instead.
 func (m Model) paneBusy(currentPane *pane) bool {
-	return m.paneAgentKind(currentPane) != "" && currentPane.running &&
-		currentPane.term != nil && currentPane.term.HasSpinner()
+	kind := m.paneAgentKind(currentPane)
+	if kind == "" || !currentPane.running || currentPane.term == nil {
+		return false
+	}
+	if spec := agentByKind(kind); spec != nil && spec.busyMatch != "" {
+		return currentPane.term.HasScreenText(spec.busyMatch)
+	}
+	return currentPane.term.HasSpinner()
 }
 
 func (m Model) paneIcon(currentPane *pane) string {
