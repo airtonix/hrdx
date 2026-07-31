@@ -919,14 +919,20 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case modePrefix:
-		// Arrows page through the hint row on narrow terminals without
-		// leaving prefix mode.
+		// Pane cycling and hint scrolling stay in prefix mode so they can be
+		// repeated. Escape returns input to the focused terminal.
 		switch msg.String() {
+		case "tab", "shift+tab":
+			return m.runPrefix(msg)
 		case "right":
 			m.hintScroll = min(m.hintScroll+1, len(prefixHintList)-1)
 			return m, nil
 		case "left":
 			m.hintScroll = max(0, m.hintScroll-1)
+			return m, nil
+		case "esc":
+			m.mode = modeTerminal
+			m.hintScroll = 0
 			return m, nil
 		}
 		m.mode = modeTerminal
@@ -975,10 +981,14 @@ func (m Model) runPrefix(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.selectTab(1)
 	case "p":
 		m.selectTab(-1)
-	case "]", "tab":
+	case "]":
 		m.selectSpace(1)
-	case "[", "shift+tab":
+	case "[":
 		m.selectSpace(-1)
+	case "tab":
+		m.cyclePane(1)
+	case "shift+tab":
+		m.cyclePane(-1)
 	case "x":
 		m.closeCurrentPane()
 	case "X":
@@ -2367,6 +2377,39 @@ func (m *Model) selectTab(delta int) {
 	count := len(currentSpace.tabs)
 	currentSpace.active = (currentSpace.active + delta + count) % count
 	m.resizePanes(currentSpace)
+}
+
+// cyclePane moves focus through the active tab's panes in layout order.
+func (m *Model) cyclePane(delta int) {
+	currentSpace := m.currentSpace()
+	if currentSpace == nil {
+		return
+	}
+	currentTab := currentSpace.tab()
+	if len(currentTab.panes) < 2 || currentTab.layout == nil {
+		return
+	}
+
+	ordered := make([]*pane, 0, len(currentTab.panes))
+	currentTab.layout.walk(func(target *pane) { ordered = append(ordered, target) })
+	current := m.currentPane()
+	position := -1
+	for index, target := range ordered {
+		if target == current {
+			position = index
+			break
+		}
+	}
+	if position < 0 {
+		return
+	}
+	next := ordered[(position+delta+len(ordered))%len(ordered)]
+	for index, target := range currentTab.panes {
+		if target == next {
+			currentTab.selected = index
+			return
+		}
+	}
 }
 
 func (m *Model) closeCurrentPane() {

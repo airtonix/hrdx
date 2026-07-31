@@ -246,6 +246,65 @@ func TestParseCSIU(t *testing.T) {
 	}
 }
 
+func TestCyclePaneUsesLayoutOrder(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	currentSpace := model.spaces[0]
+	first := currentSpace.tab().panes[0]
+	second := model.addPane(currentSpace, "shell", true)
+	third := model.addPaneSide(currentSpace, "zot", true, true)
+
+	// The split tree is first, third, second even though the pane slice is
+	// first, second, third. Start focused on third.
+	if model.currentPane() != third {
+		t.Fatal("third pane should start focused")
+	}
+	model.cyclePane(1)
+	if model.currentPane() != second {
+		t.Fatal("next should follow layout order")
+	}
+	model.cyclePane(1)
+	if model.currentPane() != first {
+		t.Fatal("next should wrap from the last pane to the first")
+	}
+	model.cyclePane(-1)
+	if model.currentPane() != second {
+		t.Fatal("previous should wrap backward")
+	}
+}
+
+func TestPrefixTabKeepsCyclingUntilEscape(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	currentSpace := model.spaces[0]
+	first := currentSpace.tab().panes[0]
+	second := model.addPane(currentSpace, "shell", true)
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlB})
+	model = updated.(Model)
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(Model)
+	if model.currentPane() != first || model.mode != modePrefix {
+		t.Fatal("tab should focus the next pane and remain in prefix mode")
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(Model)
+	if model.currentPane() != second || model.mode != modePrefix {
+		t.Fatal("a second tab should continue cycling panes")
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	model = updated.(Model)
+	if model.currentPane() != first || model.mode != modePrefix {
+		t.Fatal("shift+tab should cycle backward and remain in prefix mode")
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	if model.mode != modeTerminal {
+		t.Fatal("escape should leave prefix mode")
+	}
+}
+
 func TestResolveDirRejectsMissing(t *testing.T) {
 	if _, err := resolveDir("/definitely/not/here-12345"); err == nil {
 		t.Fatal("resolveDir accepted a missing directory")

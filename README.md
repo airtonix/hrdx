@@ -66,6 +66,7 @@ All keys go to the focused terminal, except the `ctrl+b` prefix (tmux style):
 | `t` | New tab in the current workspace (opens the agent/shell picker) |
 | `n` / `p` | Next / previous tab |
 | `]` / `[` | Next / previous workspace |
+| `tab` / `shift+tab` | Next / previous pane; stays in prefix mode for repeated jumps, `esc` exits |
 | `r` | Rename the focused pane |
 | `m` | Open the pane context menu |
 | `=` | Equalize all splits |
