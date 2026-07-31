@@ -94,8 +94,9 @@ All keys go to the focused terminal, except the `ctrl+b` prefix (tmux style):
 
 - Click a tab in the tab bar to switch, or `+` to open a new tab; right-click a tab for new/rename/close
 - Click a workspace or pane in the `workspaces` section to select it; right-click a workspace for rename/close/new tab
+- Drag a workspace up or down in the sidebar to reorder the list; the new order is persisted
 - Wheel over the sidebar scrolls it when the list is longer than the window
-- Click an agent in the `agents` section to jump straight to that pane
+- Click an agent in the `agents` section to jump straight to that pane; agents launched manually inside a shell pane are detected via the PTY's foreground process and listed too (as `zot (shell 1)`)
 - Click `+ new workspace` to add a project
 - Click a pane to focus it; clicks and wheel events are forwarded to the child when it enabled mouse reporting (agent TUIs do)
 - Right-click a pane for the context menu: rename, split left/right/up/down (with agent/shell picker), close

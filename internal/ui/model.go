@@ -143,6 +143,8 @@ type Model struct {
 	completions []string
 	completion  int
 	sideScroll  int
+	dragSpace   *space      // sidebar workspace being dragged for reordering
+	dragMoved   bool        // the drag moved rows: suppress persist-less release
 	hintScroll  int         // first visible hint in the ctrl+b footer row
 	updateInfo  update.Info // populated async; Available drives the notice
 }
@@ -185,7 +187,7 @@ func (m *Model) anyBusy() bool {
 	for _, currentSpace := range m.spaces {
 		for _, currentTab := range currentSpace.tabs {
 			for _, currentPane := range currentTab.panes {
-				if paneBusy(currentPane) {
+				if m.paneBusy(currentPane) {
 					return true
 				}
 			}
@@ -1129,6 +1131,33 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// A workspace drag in the sidebar reorders the list. Rows under the
+	// cursor resolve through sidebarHit, so dragging across pane rows or
+	// branch rows targets their workspace too.
+	if m.dragSpace != nil {
+		switch msg.Action {
+		case tea.MouseActionMotion:
+			if msg.X > sidebarWidth {
+				return m, nil
+			}
+			kind, index, _ := m.sidebarHit(msg.Y - 1)
+			if (kind == "space" || kind == "pane") && index >= 0 && index < len(m.spaces) &&
+				m.spaces[index] != m.dragSpace {
+				if m.moveSpaceTo(m.dragSpace, index) {
+					m.dragMoved = true
+				}
+			}
+			return m, nil
+		case tea.MouseActionRelease:
+			if m.dragMoved {
+				m.persist()
+			}
+			m.dragSpace = nil
+			m.dragMoved = false
+			return m, nil
+		}
+	}
+
 	// Right-click on a pane opens the context menu.
 	if inTerminal && msg.Button == tea.MouseButtonRight && msg.Action == tea.MouseActionPress {
 		if currentSpace := m.currentSpace(); currentSpace != nil {
@@ -1295,6 +1324,10 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case "space":
 		if index >= 0 && index < len(m.spaces) {
 			m.selected = index
+			// Arm a reorder drag; a plain click releases without motion
+			// and leaves the order untouched.
+			m.dragSpace = m.spaces[index]
+			m.dragMoved = false
 		}
 	case "pane":
 		if index >= 0 && index < len(m.spaces) {
@@ -1307,6 +1340,27 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m.openNewSpaceInput()
 	}
 	return m, nil
+}
+
+// moveSpaceTo moves target to the given index in the workspace list and
+// follows it with the selection. Returns true when the order changed.
+func (m *Model) moveSpaceTo(target *space, index int) bool {
+	from := -1
+	for i, currentSpace := range m.spaces {
+		if currentSpace == target {
+			from = i
+			break
+		}
+	}
+	if from < 0 || index < 0 || index >= len(m.spaces) || index == from {
+		return false
+	}
+	m.spaces = append(m.spaces[:from], m.spaces[from+1:]...)
+	m.spaces = append(m.spaces, nil)
+	copy(m.spaces[index+1:], m.spaces[index:])
+	m.spaces[index] = target
+	m.selected = index
+	return true
 }
 
 // paneByIndex resolves a flat pane index (across tabs) for sidebar rows.
@@ -1364,10 +1418,11 @@ type sidebarRow struct {
 	pane  int
 }
 
-// paneBusy reports whether a running agent pane is currently working, based
-// on the braille spinner these TUIs render during a turn.
-func paneBusy(currentPane *pane) bool {
-	return isAgentKind(currentPane.kind) && currentPane.running &&
+// paneBusy reports whether a pane running an agent (agent panes, or shell
+// panes with an agent in the foreground) is currently working, based on
+// the braille spinner these TUIs render during a turn.
+func (m Model) paneBusy(currentPane *pane) bool {
+	return m.paneAgentKind(currentPane) != "" && currentPane.running &&
 		currentPane.term != nil && currentPane.term.HasSpinner()
 }
 
@@ -1375,7 +1430,7 @@ func (m Model) paneIcon(currentPane *pane) string {
 	if currentPane.failure != "" {
 		return styleDotOff.Render("!")
 	}
-	if paneBusy(currentPane) {
+	if m.paneBusy(currentPane) {
 		return styleDotBusy.Render(spinnerFrames[m.spinFrame])
 	}
 	if currentPane.running {
@@ -1456,11 +1511,14 @@ func (m Model) sidebarRows() []sidebarRow {
 		for _, currentTab := range currentSpace.tabs {
 			for _, currentPane := range currentTab.panes {
 				flat++
-				if !isAgentKind(currentPane.kind) {
+				agentKind := m.paneAgentKind(currentPane)
+				if agentKind == "" {
 					continue
 				}
 				// Only abnormal states get a word; the spinner already
-				// tells working apart from idle.
+				// tells working apart from idle. Agents inside shell
+				// panes vanish from the list when they exit, so those
+				// states only apply to dedicated agent panes.
 				stateLabel := ""
 				switch {
 				case currentPane.failure != "":
@@ -1470,7 +1528,13 @@ func (m Model) sidebarRows() []sidebarRow {
 				case currentPane.term == nil:
 					stateLabel = " " + stylePaneDim.Render("starting")
 				}
-				name := truncate(currentPane.name, sidebarWidth-6)
+				// Shell panes hosting an agent show the agent name with
+				// the pane name for context (e.g. "zot (shell 1)").
+				display := currentPane.name
+				if !isAgentKind(currentPane.kind) {
+					display = agentKind + " (" + currentPane.name + ")"
+				}
+				name := truncate(display, sidebarWidth-6)
 				nameLabel := stylePaneDim.Render(name)
 				if spaceIndex == m.selected && m.currentPane() == currentPane {
 					nameLabel = stylePaneSel.Render(name)

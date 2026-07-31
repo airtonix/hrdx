@@ -5,10 +5,15 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/creack/pty"
 	"github.com/patriceckhart/hrdx/internal/vt"
+	"golang.org/x/sys/unix"
 )
 
 // Pane is one real terminal session: a subprocess on a PTY whose output is
@@ -22,6 +27,10 @@ type Pane struct {
 	exited    bool
 	kittyKeys bool
 	scanTail  []byte
+
+	// Foreground process cache for ForegroundCommand.
+	fgName      string
+	fgCheckedAt time.Time
 
 	// scrollOffset counts lines scrolled back into history; 0 is live.
 	scrollOffset int
@@ -106,6 +115,56 @@ func (p *Pane) scanKeyboardProtocol(chunk []byte) {
 		data = data[len(data)-8:]
 	}
 	p.scanTail = append(p.scanTail[:0], data...)
+}
+
+// fgCacheTTL bounds how often ForegroundCommand does the ioctl + process
+// name lookup; the sidebar queries it on every render.
+const fgCacheTTL = 2 * time.Second
+
+// ForegroundCommand returns the name of the foreground process on the
+// pane's PTY (e.g. "zsh" for an idle shell, "zot" while zot runs in it).
+// The result is cached briefly; "" when it cannot be determined.
+func (p *Pane) ForegroundCommand() string {
+	p.mu.Lock()
+	if p.exited {
+		p.mu.Unlock()
+		return ""
+	}
+	if time.Since(p.fgCheckedAt) < fgCacheTTL {
+		name := p.fgName
+		p.mu.Unlock()
+		return name
+	}
+	p.fgCheckedAt = time.Now()
+	fd := int(p.pty.Fd())
+	p.mu.Unlock()
+
+	// The PTY master reports the foreground process group of its slave
+	// side; the group leader is the running command.
+	name := ""
+	if pgid, err := unix.IoctlGetInt(fd, unix.TIOCGPGRP); err == nil && pgid > 0 {
+		name = processName(pgid)
+	}
+
+	p.mu.Lock()
+	p.fgName = name
+	p.mu.Unlock()
+	return name
+}
+
+// processName resolves a pid to its command name. Linux reads /proc, other
+// unixes shell out to ps; both paths return the bare name without path.
+func processName(pid int) string {
+	if data, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid)); err == nil {
+		return strings.TrimSpace(string(data))
+	}
+	output, err := exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return ""
+	}
+	name := strings.TrimSpace(string(output))
+	// Login shells report as "-zsh"; strip the marker before basing.
+	return strings.TrimPrefix(filepath.Base(name), "-")
 }
 
 // KittyKeys reports whether the child requested enhanced (CSI-u) keyboard

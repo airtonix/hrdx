@@ -72,6 +72,29 @@ func TestScrollbackAndSelection(t *testing.T) {
 	}
 }
 
+func TestForegroundCommand(t *testing.T) {
+	pane := startShellPane(t, "sleep 30")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		pane.mu.Lock()
+		pane.fgCheckedAt = time.Time{} // bypass the cache while polling
+		pane.mu.Unlock()
+		name := pane.ForegroundCommand()
+		if name == "sleep" || name == "sh" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("foreground = %q, want sleep or sh", name)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	pane.Close()
+	waitExit(t, pane)
+	if name := pane.ForegroundCommand(); name != "" {
+		t.Fatalf("foreground after exit = %q, want empty", name)
+	}
+}
+
 func stripANSI(value string) string {
 	var out strings.Builder
 	inEscape := false

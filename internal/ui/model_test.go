@@ -131,6 +131,81 @@ func TestMouseSelectsSpace(t *testing.T) {
 	}
 }
 
+func TestMoveSpaceTo(t *testing.T) {
+	model := newTestModel("/tmp/api", "/tmp/web", "/tmp/cli")
+	api, web, cli := model.spaces[0], model.spaces[1], model.spaces[2]
+
+	if !model.moveSpaceTo(api, 2) {
+		t.Fatal("moveSpaceTo(api, 2) reported no change")
+	}
+	if model.spaces[0] != web || model.spaces[1] != cli || model.spaces[2] != api {
+		t.Fatalf("order = %s/%s/%s, want web/cli/api",
+			model.spaces[0].name, model.spaces[1].name, model.spaces[2].name)
+	}
+	if model.selected != 2 {
+		t.Fatalf("selected = %d, want 2 (follows the moved space)", model.selected)
+	}
+
+	if !model.moveSpaceTo(api, 0) {
+		t.Fatal("moveSpaceTo(api, 0) reported no change")
+	}
+	if model.spaces[0] != api || model.spaces[1] != web || model.spaces[2] != cli {
+		t.Fatalf("order = %s/%s/%s, want api/web/cli",
+			model.spaces[0].name, model.spaces[1].name, model.spaces[2].name)
+	}
+	if model.moveSpaceTo(api, 0) {
+		t.Fatal("moveSpaceTo to the same index should report no change")
+	}
+	if model.moveSpaceTo(api, 5) {
+		t.Fatal("moveSpaceTo out of range should report no change")
+	}
+}
+
+func TestSidebarDragReordersSpaces(t *testing.T) {
+	model := newTestModel("/tmp/api", "/tmp/web")
+	api, web := model.spaces[0], model.spaces[1]
+
+	// Rows: 0 blank, 1 WORKSPACES, 2 space api, 3 pane, 4 space web,
+	// 5 pane. Screen Y is row + 1. Press on api's name arms the drag.
+	updated, _ := model.updateMouse(tea.MouseMsg{X: 3, Y: 3, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	got := updated.(Model)
+	if got.dragSpace != api {
+		t.Fatal("press on a workspace row should arm the drag")
+	}
+
+	// Drag down onto web's rows: api moves below web.
+	updated, _ = got.updateMouse(tea.MouseMsg{X: 3, Y: 5, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
+	got = updated.(Model)
+	if got.spaces[0] != web || got.spaces[1] != api {
+		t.Fatalf("order after drag = %s/%s, want web/api", got.spaces[0].name, got.spaces[1].name)
+	}
+	if got.selected != 1 {
+		t.Fatalf("selected = %d, want 1 (follows the dragged space)", got.selected)
+	}
+
+	updated, _ = got.updateMouse(tea.MouseMsg{X: 3, Y: 5, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
+	got = updated.(Model)
+	if got.dragSpace != nil || got.dragMoved {
+		t.Fatal("release should clear the drag state")
+	}
+}
+
+func TestSidebarClickWithoutMotionKeepsOrder(t *testing.T) {
+	model := newTestModel("/tmp/api", "/tmp/web")
+	api := model.spaces[0]
+
+	updated, _ := model.updateMouse(tea.MouseMsg{X: 3, Y: 3, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	got := updated.(Model)
+	updated, _ = got.updateMouse(tea.MouseMsg{X: 3, Y: 3, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
+	got = updated.(Model)
+	if got.spaces[0] != api {
+		t.Fatal("a plain click must not reorder workspaces")
+	}
+	if got.selected != 0 || got.dragSpace != nil {
+		t.Fatalf("selected = %d dragSpace = %v, want 0/nil", got.selected, got.dragSpace)
+	}
+}
+
 func TestMouseTabBarAddsTab(t *testing.T) {
 	model := newTestModel("/tmp/api")
 	// Tab bar is screen row 1; "+" for a single tab sits at local x 3..5.

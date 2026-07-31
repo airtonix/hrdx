@@ -1,6 +1,9 @@
 package ui
 
-import "os/exec"
+import (
+	"os/exec"
+	"path/filepath"
+)
 
 // agentSpec describes one supported coding agent CLI.
 type agentSpec struct {
@@ -41,6 +44,28 @@ func (c Config) binaryFor(kind string) string {
 		return spec.binary
 	}
 	return kind
+}
+
+// paneAgentKind returns the agent kind a pane is effectively running: the
+// pane's own kind for agent panes, or the agent matching the PTY's
+// foreground process for shell panes. "" when the pane runs no agent.
+func (m Model) paneAgentKind(currentPane *pane) string {
+	if isAgentKind(currentPane.kind) {
+		return currentPane.kind
+	}
+	if currentPane.term == nil || !currentPane.running {
+		return ""
+	}
+	foreground := currentPane.term.ForegroundCommand()
+	if foreground == "" {
+		return ""
+	}
+	for _, spec := range agentSpecs {
+		if foreground == spec.binary || foreground == filepath.Base(m.config.binaryFor(spec.kind)) {
+			return spec.kind
+		}
+	}
+	return ""
 }
 
 // availableAgents returns the agent kinds whose binary is on $PATH (or
