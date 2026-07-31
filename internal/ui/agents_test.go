@@ -130,8 +130,12 @@ func TestSoundToggleRoundTrip(t *testing.T) {
 	}
 	model.settingsTab = 1
 	rows := model.settingsRows()
-	if len(rows) != 1+len(soundKindList()) || rows[0].action != "sound" {
-		t.Fatalf("sound rows = %+v", rows)
+	// checkbox + one radio per sound + the system notification toggle.
+	if len(rows) != 2+len(soundKindList()) || rows[0].action != "sound" {
+		t.Fatalf("notification rows = %+v", rows)
+	}
+	if rows[len(rows)-1].action != "notify" {
+		t.Fatalf("last row = %+v, want the notify toggle", rows[len(rows)-1])
 	}
 	model.toggleSettingsRow(rows[0])
 	if !model.soundOn {
@@ -141,17 +145,15 @@ func TestSoundToggleRoundTrip(t *testing.T) {
 		t.Fatal("snapshot should carry the sound setting")
 	}
 
-	// Selecting a sound kind persists and restores.
-	model.toggleSettingsRow(settingsRow{action: "sound:bell"})
-	if model.soundKind != "bell" {
-		t.Fatalf("soundKind = %q, want bell", model.soundKind)
+	// The system notification toggle persists too.
+	model.toggleSettingsRow(settingsRow{action: "notify"})
+	if !model.notifyOn || !model.snapshot().Notify {
+		t.Fatal("notify should be on and persisted")
 	}
-	if model.snapshot().SoundKind != "bell" {
-		t.Fatal("snapshot should carry the sound kind")
-	}
+
 	restored := New(Config{Shell: "/bin/sh"}, nil, "", model.snapshot())
-	if !restored.soundOn || restored.soundKind != "bell" {
-		t.Fatalf("restore = %v/%q, want on/bell", restored.soundOn, restored.soundKind)
+	if !restored.soundOn || !restored.notifyOn || restored.soundKind != defaultSoundKind {
+		t.Fatalf("restore = %v/%v/%q", restored.soundOn, restored.notifyOn, restored.soundKind)
 	}
 
 	// Unknown kinds fall back to the default.

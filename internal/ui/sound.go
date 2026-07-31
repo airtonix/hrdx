@@ -20,9 +20,8 @@ var soundFiles embed.FS
 // soundsFile declares custom notification sounds in the state directory.
 const soundsFile = "sounds.json"
 
-// builtinSounds are always available. "ding" is embedded, "bell" is the
-// terminal bell.
-var builtinSounds = []string{"ding", "bell"}
+// builtinSounds are always available; "ding" is embedded in the binary.
+var builtinSounds = []string{"ding"}
 
 const defaultSoundKind = "ding"
 
@@ -154,14 +153,15 @@ func soundFile(kind string) string {
 	return path
 }
 
-// playSound plays the configured notification sound in the background.
-// "bell" writes BEL; file-backed kinds go through an OS audio player
-// with the bell as last resort.
+// ringBell writes BEL to the host terminal; terminals surface it as
+// their notification (badge, dock bounce, or sound, per user config).
+func ringBell() {
+	_, _ = os.Stdout.WriteString("\a")
+}
+
+// playSound plays the configured notification sound in the background
+// through an OS audio player, with the terminal bell as last resort.
 func playSound(kind string) {
-	if kind == "bell" {
-		_, _ = os.Stdout.WriteString("\a")
-		return
-	}
 	file := soundFile(kind)
 	go func() {
 		if file != "" {

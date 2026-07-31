@@ -71,7 +71,7 @@ All keys go to the focused terminal, except the `ctrl+b` prefix (tmux style):
 | `=` | Equalize all splits |
 | `u` / `d` (or `pgup`/`pgdown`) | Scroll the focused pane's history |
 | `esc` / `G` | Back to live output, clear selection |
-| `,` | Settings window: enable / disable agents, finish sound |
+| `,` | Settings window: enable / disable agents, notifications |
 | `x` | Close pane (sibling takes its room) |
 | `X` | Close workspace |
 | `ctrl+b` | Send a literal ctrl+b to the pane |
@@ -145,9 +145,9 @@ After `events.subscribe` the connection stays open and hrdx pushes lines like `{
 
 Every request is answered by the TUI's own update loop, so the API always sees exactly what is on screen. `pane.wait` plus `pane.send_text` is enough to build simple agent pipelines: prompt an agent, wait until it is idle, read the screen, move on.
 
-## Custom sounds
+## Notifications
 
-The finish notification ships with a built-in `ding` and the terminal `bell`. Add your own sounds with a `sounds.json` next to the state file; they appear in the settings window's sound section and are previewed when selected:
+The notification section of the settings window has two independent toggles for finished agent turns: play a sound (built-in `ding`, or your own audio files) and a system notification, which rings the terminal bell so your terminal surfaces its own indicator (badge, dock bounce, or sound, per its config). Add custom sounds with a `sounds.json` next to the state file; they appear as choices and are previewed when selected:
 
 ```json
 [

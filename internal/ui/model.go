@@ -148,7 +148,8 @@ type Model struct {
 	branches      map[string]branchInfo
 	disabled      map[string]bool // agent kinds switched off in settings
 	soundOn       bool            // play a sound when an agent finishes a turn
-	soundKind     string          // which sound: "ding", "sheep", "bell"
+	soundKind     string          // which sound: "ding" or a sounds.json entry
+	notifyOn      bool            // ring the terminal bell (system notification)
 	wasBusy       map[int]bool    // pane id -> spinner seen, for the finish sound
 	settingsTab   int             // active tab of the settings window
 	settingsIndex int             // selected row of the settings window
@@ -270,7 +271,7 @@ func (m *Model) trackBusy(target *pane) tea.Cmd {
 	delete(m.wasBusy, target.id)
 	m.publish(api.Event{Event: api.EventPaneBusyChanged,
 		Data: api.PaneEvent{Pane: target.id, Name: target.name, Kind: target.kind, Busy: false}})
-	if !m.soundOn {
+	if !m.soundOn && !m.notifyOn {
 		return nil
 	}
 	id := target.id
@@ -343,7 +344,7 @@ func New(config Config, paths []string, statePath string, saved state.State) Mod
 	model := Model{config: config, input: input, nextID: 1, statePath: statePath,
 		branches: map[string]branchInfo{}, disabled: map[string]bool{},
 		wasBusy: map[int]bool{}, soundOn: saved.Sound, status: harnessProblem,
-		soundKind: saved.SoundKind}
+		soundKind: saved.SoundKind, notifyOn: saved.Notify}
 	if statePath != "" {
 		if problem := loadSounds(filepath.Dir(statePath)); problem != "" {
 			if model.status != "" {
@@ -695,6 +696,9 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.soundOn {
 			playSound(m.soundKind)
+		}
+		if m.notifyOn {
+			ringBell()
 		}
 		return m, nil
 

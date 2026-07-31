@@ -58,10 +58,12 @@ type State struct {
 	// settings window; they are hidden from pickers and cycling.
 	DisabledAgents []string `json:"disabled_agents,omitempty"`
 
-	// Sound plays a notification when an agent finishes a turn;
-	// SoundKind selects which one ("ding", "sheep", "bell").
+	// Sound plays an audio notification when an agent finishes a turn;
+	// SoundKind selects which one. Notify rings the terminal bell so
+	// the terminal can surface its own notification (badge, bounce).
 	Sound     bool   `json:"sound,omitempty"`
 	SoundKind string `json:"sound_kind,omitempty"`
+	Notify    bool   `json:"notify,omitempty"`
 }
 
 // DefaultPath returns the state file location under the user config dir.

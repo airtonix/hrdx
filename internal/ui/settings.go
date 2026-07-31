@@ -17,7 +17,7 @@ type settingsRow struct {
 	action string // "toggle:<kind>", "sound", or "sound:<kind>"
 }
 
-var settingsTabNames = []string{"agents", "sound"}
+var settingsTabNames = []string{"agents", "notification"}
 
 func (m *Model) openSettings() {
 	m.mode = modeSettings
@@ -31,12 +31,16 @@ func (m *Model) closeSettings() {
 // settingsRows returns the rows of the active section.
 func (m Model) settingsRows() []settingsRow {
 	switch m.settingsTab {
-	case 1: // sound
-		box := "[ ] "
-		if m.soundOn {
-			box = "[x] "
+	case 1: // notification
+		check := func(on bool) string {
+			if on {
+				return "[x] "
+			}
+			return "[ ] "
 		}
-		rows := []settingsRow{{box + "play a sound when an agent finishes", "sound"}}
+		rows := []settingsRow{
+			{check(m.soundOn) + "play a sound when an agent finishes", "sound"},
+		}
 		for _, kind := range soundKindList() {
 			mark := "( ) "
 			if m.soundKind == kind {
@@ -44,6 +48,9 @@ func (m Model) settingsRows() []settingsRow {
 			}
 			rows = append(rows, settingsRow{"  " + mark + kind, "sound:" + kind})
 		}
+		rows = append(rows, settingsRow{
+			check(m.notifyOn) + "system notification (bell to the terminal)", "notify",
+		})
 		return rows
 	default: // agents
 		installed := map[string]bool{}
@@ -87,6 +94,10 @@ func (m *Model) toggleSettingsRow(row settingsRow) tea.Cmd {
 		if m.soundOn {
 			playSound(m.soundKind)
 		}
+	}
+	if row.action == "notify" {
+		m.notifyOn = !m.notifyOn
+		m.persist()
 	}
 	return nil
 }
