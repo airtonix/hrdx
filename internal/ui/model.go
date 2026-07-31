@@ -505,6 +505,19 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateInfo = msg.info
 		return m, nil
 
+	case tea.FocusMsg:
+		// Regaining focus (e.g. after system sleep or a terminal-side
+		// redraw glitch) can leave stale artifacts: the renderer's line
+		// cache no longer matches what is really on screen. Repaint
+		// everything and re-push the layout sizes to the PTYs.
+		for _, currentSpace := range m.spaces {
+			m.resizePanes(currentSpace)
+		}
+		return m, tea.ClearScreen
+
+	case tea.BlurMsg:
+		return m, nil
+
 	case paneStartedMsg:
 		target, owner := m.paneByID(msg.id)
 		if target == nil {

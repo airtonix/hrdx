@@ -160,7 +160,10 @@ func main() {
 	modelUI := ui.New(config, cwd, statePath, saved)
 	events := api.NewBroadcaster()
 	modelUI.SetEventBroadcaster(events)
-	program := tea.NewProgram(modelUI, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	// WithReportFocus: after system sleep the terminal's screen contents
+	// and the renderer's cache can disagree; the focus-regained event on
+	// wake triggers a full repaint (see FocusMsg in the update loop).
+	program := tea.NewProgram(modelUI, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithReportFocus())
 
 	if apiOn && statePath != "" {
 		socket := filepath.Join(filepath.Dir(statePath), "hrdx.sock")
