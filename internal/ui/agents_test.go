@@ -146,6 +146,23 @@ func TestSoundToggleRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPaneDisplayName(t *testing.T) {
+	model := New(Config{Shell: "/bin/sh"}, []string{"/tmp/api"}, "", state.State{})
+	target := model.spaces[0].tab().panes[0]
+
+	// Agent panes show their own name.
+	if got := model.paneDisplayName(target); got != target.name {
+		t.Fatalf("agent pane display = %q, want %q", got, target.name)
+	}
+
+	// Shell panes without a running agent show their own name too. The
+	// pane has no terminal yet, so no foreground detection happens.
+	shellPane := model.addPane(model.spaces[0], "shell", true)
+	if got := model.paneDisplayName(shellPane); got != shellPane.name {
+		t.Fatalf("shell pane display = %q, want %q", got, shellPane.name)
+	}
+}
+
 func TestRestoreKeepsAgentKinds(t *testing.T) {
 	saved := state.State{Workspaces: []state.Workspace{{
 		Name: "api", CWD: "/tmp/api",

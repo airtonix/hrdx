@@ -72,6 +72,19 @@ func (m Model) paneAgentKind(currentPane *pane) string {
 	return ""
 }
 
+// paneDisplayName returns the name a pane should show in lists: its own
+// name, or "<agent> (<name>)" when a shell pane currently runs an agent
+// in the foreground.
+func (m Model) paneDisplayName(currentPane *pane) string {
+	if isAgentKind(currentPane.kind) {
+		return currentPane.name
+	}
+	if kind := m.paneAgentKind(currentPane); kind != "" {
+		return kind + " (" + currentPane.name + ")"
+	}
+	return currentPane.name
+}
+
 // installedAgents returns the agent kinds whose binary is on $PATH (or
 // overridden), regardless of the enabled/disabled setting.
 func (m Model) installedAgents() []string {

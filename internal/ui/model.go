@@ -1653,7 +1653,7 @@ func (m Model) sidebarRows() []sidebarRow {
 				selected := spaceIndex == m.selected &&
 					currentTab == currentSpace.tabs[currentSpace.active] &&
 					currentTab.panes[currentTab.selected] == currentPane
-				name := truncate(currentPane.name, sidebarWidth-10)
+				name := truncate(m.paneDisplayName(currentPane), sidebarWidth-10)
 				nameLabel := stylePaneDim.Render(name)
 				if selected {
 					nameLabel = stylePaneSel.Render(name)
@@ -1696,13 +1696,7 @@ func (m Model) sidebarRows() []sidebarRow {
 				case currentPane.term == nil:
 					stateLabel = " " + stylePaneDim.Render("starting")
 				}
-				// Shell panes hosting an agent show the agent name with
-				// the pane name for context (e.g. "zot (shell 1)").
-				display := currentPane.name
-				if !isAgentKind(currentPane.kind) {
-					display = agentKind + " (" + currentPane.name + ")"
-				}
-				name := truncate(display, sidebarWidth-6)
+				name := truncate(m.paneDisplayName(currentPane), sidebarWidth-6)
 				nameLabel := stylePaneDim.Render(name)
 				if spaceIndex == m.selected && m.currentPane() == currentPane {
 					nameLabel = stylePaneSel.Render(name)
@@ -1843,7 +1837,7 @@ func (m Model) renderHeader() string {
 	if currentSpace := m.currentSpace(); currentSpace != nil {
 		title = styleBarText.Render(" " + currentSpace.name)
 		if current := m.currentPane(); current != nil {
-			title += styleBarMuted.Render("  " + current.name)
+			title += styleBarMuted.Render("  " + m.paneDisplayName(current))
 		}
 	}
 	right := ""
@@ -2050,7 +2044,7 @@ func (m Model) paneLines(pr paneRect, focused, showCursor bool) []string {
 	}
 
 	horizontal := strings.Repeat("─", max(0, pr.r.w-2))
-	title := " " + truncate(target.name, max(0, pr.r.w-6)) + " "
+	title := " " + truncate(m.paneDisplayName(target), max(0, pr.r.w-6)) + " "
 	top := "╭" + title + strings.Repeat("─", max(0, pr.r.w-2-lipgloss.Width(title))) + "╮"
 	bottom := "╰" + horizontal + "╯"
 	side := borderStyle.Render("│")
