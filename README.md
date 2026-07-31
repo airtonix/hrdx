@@ -1,15 +1,14 @@
 # hrdx
 
-A Bubble Tea multiplexer for coding agents: workspaces in a sidebar (with their git branch and ahead/behind counts), tabs per workspace, real terminal panes on the right. Supported agents: [zot](https://www.zot.sh), pi, Claude Code (`claude`), and Codex CLI (`codex`).
+**Run all your coding agents. In one terminal. At once.**
 
-Every pane is a real PTY session. Agent panes run the full interactive agent TUI (streaming, slash commands, sessions), and shell panes run your login shell. Pane output is parsed by a vt10x terminal emulator, so what you see is the real program, not a wrapped interpretation.
+hrdx is a minimal and lightweight terminal multiplexer built for the agent era: your projects as workspaces in a sidebar, tabs per workspace, and real terminal panes running [Codex CLI](https://learn.chatgpt.com/docs/codex/cli), [Claude Code](https://code.claude.com/docs/en/quickstart), [zot](https://www.zot.sh), [pi](https://www.pi.dev) or plain shells side by side. Kick off an agent in one project, switch to the next, and let the sidebar spinners tell you who is still working.
 
-hrdx enables the kitty keyboard protocol in the host terminal, so modified chords without a legacy encoding (for example zot's ctrl+1 model switcher) pass through to panes in terminals that support it (Ghostty, kitty, WezTerm, iTerm2, foot).
-
-## Requirements
-
-- Go 1.25 or newer, macOS or Linux
-- at least one agent CLI installed and authenticated: `zot`, `pi`, `claude`, or `codex`
+- **Real terminals, not wrappers.** Every pane is a genuine PTY session with a full terminal emulator behind it. Agent TUIs run exactly as they do standalone: streaming, slash commands, sessions, mouse support, all of it.
+- **Everything in view.** The sidebar shows every workspace with its git branch and ahead/behind counts, every pane with a live status dot, and an agents list that jumps you straight to any running agent, including ones you started by hand inside a shell.
+- **Feels like your terminal.** Scrollback, mouse selection with clipboard copy, drag-to-resize splits, drag-to-reorder workspaces, right-click context menus, and kitty keyboard protocol pass-through so even exotic chords like ctrl+1 reach your agent.
+- **Picks up where you left off.** Workspaces, tabs, splits, and ratios survive restarts. Agent panes relaunch resuming their latest session for that project, automatically.
+- **Yours to tune.** A settings window (`ctrl+b ,` or the gear in the sidebar) lets you switch individual agents on or off and enable a notification sound when an agent finishes its turn. All persisted.
 
 ## Install
 
@@ -17,35 +16,19 @@ hrdx enables the kitty keyboard protocol in the host terminal, so modified chord
 curl -fsSL https://raw.githubusercontent.com/patriceckhart/hrdx/main/install.sh | bash
 ```
 
-The installer detects OS and architecture, downloads the matching release archive, verifies its sha256 against the release checksums, and installs the binary into the first writable directory of `/usr/local/bin`, `~/.local/bin`, `~/bin`. Pin a version or prefix with `bash -s -- v0.0.1 ~/bin`.
-
-Update later with:
-
-```sh
-hrdx update           # download and install the newest release
-hrdx update --check   # show what update is available, install nothing
-```
-
-The TUI also checks for a newer release at startup (cached for 12 hours) and shows an `update x.y.z` badge in the header plus a hint in the footer when one is available.
+macOS or Linux, plus at least one agent CLI on your PATH: `codex`, `claude`, `pi` or `zot`. Update any time with `hrdx update`.
 
 ## Run
 
 ```sh
-go run ./cmd/hrdx
+hrdx
 ```
 
-Open several projects as workspaces:
+Open several projects at once, or pick your default agent:
 
 ```sh
-go run ./cmd/hrdx \
-  --cwd ~/Developer/api \
-  --cwd ~/Developer/web
-```
-
-Use Claude Code as the default agent:
-
-```sh
-go run ./cmd/hrdx --agent claude
+hrdx --cwd ~/Developer/api --cwd ~/Developer/web
+hrdx --agent claude
 ```
 
 ### Flags
@@ -58,15 +41,15 @@ go run ./cmd/hrdx --agent claude
 | `--model ID` | Pass a model to every zot pane (zot only) |
 | `--reasoning LEVEL` | Set the reasoning level (zot only) |
 | `--continue` | Resume each project's latest session |
-| `--zot-bin PATH` | Use a specific zot binary |
-| `--pi-bin PATH` | Use a specific pi binary |
-| `--claude-bin PATH` | Use a specific claude binary |
 | `--codex-bin PATH` | Use a specific codex binary |
+| `--claude-bin PATH` | Use a specific claude binary |
+| `--pi-bin PATH` | Use a specific pi binary |
+| `--zot-bin PATH` | Use a specific zot binary |
 | `--shell PATH` | Shell for shell panes (default `$SHELL`) |
 | `--state PATH` | State file for workspace persistence (empty disables) |
 | `--fresh` | Ignore saved workspaces and start clean |
 
-### Keys
+## Keys
 
 All keys go to the focused terminal, except the `ctrl+b` prefix (tmux style):
 
@@ -84,56 +67,27 @@ All keys go to the focused terminal, except the `ctrl+b` prefix (tmux style):
 | `=` | Equalize all splits |
 | `u` / `d` (or `pgup`/`pgdown`) | Scroll the focused pane's history |
 | `esc` / `G` | Back to live output, clear selection |
+| `,` | Settings window: enable / disable agents, finish sound |
 | `x` | Close pane (sibling takes its room) |
 | `X` | Close workspace |
 | `ctrl+b` | Send a literal ctrl+b to the pane |
 | `q` | Quit |
 | `left` / `right` | Scroll the hint row in the footer (narrow terminals) |
 
-### Mouse
+## Mouse
 
-- Click a tab in the tab bar to switch, or `+` to open a new tab; right-click a tab for new/rename/close
-- Click a workspace or pane in the `workspaces` section to select it; right-click a workspace for rename/close/new tab
-- Drag a workspace up or down in the sidebar to reorder the list; the new order is persisted
-- Wheel over the sidebar scrolls it when the list is longer than the window
-- Click an agent in the `agents` section to jump straight to that pane; agents launched manually inside a shell pane are detected via the PTY's foreground process and listed too (as `zot (shell 1)`)
-- Click `+ new workspace` to add a project
-- Click a pane to focus it; clicks and wheel events are forwarded to the child when it enabled mouse reporting (agent TUIs do)
-- Right-click a pane for the context menu: rename, split left/right/up/down (with agent/shell picker), close
-- Drag a shared pane border to resize the panes on either side
-
-### Scrollback and selection
-
-Each pane keeps up to 5000 lines of scrollback (primary screen only, like a normal terminal). The wheel scrolls the pane under the cursor: children that capture the mouse (agent TUIs) get the wheel events forwarded and scroll themselves; plain shells scroll the local history, with a `SCROLL` indicator in the footer showing how far back you are. Full-screen apps without mouse support receive arrow keys instead. `shift+pgup` / `shift+pgdn` scroll the focused pane from the keyboard; typing or `ctrl+b esc` snaps back to live.
-
-Drag with the left mouse button to select text (hold `shift` to force local selection over mouse-capturing apps). On release the selection is copied to the system clipboard via OSC 52 plus `pbcopy`/`wl-copy`/`xclip` when available.
+Everything is clickable: tabs, workspaces, panes, agents, menus, and the settings entry at the bottom of the sidebar. Drag workspaces to reorder them, drag pane borders to resize, right-click for context menus, and drag with the left button to select text (copied straight to your clipboard). Wheel events go to the pane under the cursor: agent TUIs scroll themselves, shells scroll their local history, and `shift+pgup` / `shift+pgdn` do the same from the keyboard.
 
 ## Persistence
 
-Workspaces, panes, split layout, ratios, and selection are saved to `--state` (default: `~/Library/Application Support/hrdx/state.json` on macOS, `$XDG_CONFIG_HOME/hrdx/state.json` on Linux) after every structural change, atomically. On the next launch everything is restored: shell panes get a fresh shell, and agent panes relaunch resuming their latest session for that directory (`--continue` for zot, pi, and claude; `resume --last` for codex). `--fresh` skips restoring; `--state ""` disables persistence entirely.
-
-## Architecture
-
-```text
-cmd/hrdx         CLI entry point
-internal/ui      Bubble Tea state, sidebar, split layout, input routing, agents
-internal/term    PTY panes: screen, scrollback, selection, renderer, key encoder
-internal/vt      vendored vt10x terminal emulator (MIT) + scrollback history
-internal/state   JSON workspace persistence (atomic save, tolerant restore)
-```
-
-Each pane owns one subprocess on a PTY. A reader goroutine feeds output into a vt10x virtual screen and signals the UI through an update channel; the renderer converts the screen (colors, bold, reverse, cursor) back into ANSI for Bubble Tea. Key presses are encoded into the byte sequences a real terminal would send, honoring application cursor mode.
-
-## Current scope
-
-Panes are children of the TUI and stop when it exits; workspaces and agent sessions come back on relaunch via the state file and each agent's own session store. Detach and reattach with live processes and a server-owned runtime with a socket API are the natural next milestones.
-
-## Releases
-
-Every push to `main` that passes CI cuts a release automatically: the release workflow bumps the patch version (`v0.0.1`, `v0.0.2`, ... rolling over to `v0.1.0` after `.99`), tags it, and GoReleaser builds `linux`/`darwin` (`amd64` + `arm64`) archives with checksums onto a GitHub Release. Put `[release=skip]` in a commit message to skip the release for that push.
+Workspaces, panes, split layout, ratios, and selection are saved automatically (default: `~/Library/Application Support/hrdx/state.json` on macOS, `$XDG_CONFIG_HOME/hrdx/state.json` on Linux). On the next launch everything is restored: shell panes get a fresh shell, and agent panes relaunch resuming their latest session for that directory. `--fresh` skips restoring; `--state ""` disables persistence entirely.
 
 ## Development
 
 ```sh
 make check
 ```
+
+## License
+
+MIT

@@ -68,13 +68,33 @@ func (m Model) paneAgentKind(currentPane *pane) string {
 	return ""
 }
 
-// availableAgents returns the agent kinds whose binary is on $PATH (or
-// overridden), falling back to just the default agent when none are found.
-func (m Model) availableAgents() []string {
+// installedAgents returns the agent kinds whose binary is on $PATH (or
+// overridden), regardless of the enabled/disabled setting.
+func (m Model) installedAgents() []string {
 	var found []string
 	for _, spec := range agentSpecs {
 		if _, err := exec.LookPath(m.config.binaryFor(spec.kind)); err == nil {
 			found = append(found, spec.kind)
+		}
+	}
+	return found
+}
+
+// availableAgents returns the installed agent kinds that are not disabled
+// in settings. When no binary is found at all, it falls back to every
+// enabled kind so pickers still offer something to launch.
+func (m Model) availableAgents() []string {
+	var found []string
+	for _, kind := range m.installedAgents() {
+		if !m.disabled[kind] {
+			found = append(found, kind)
+		}
+	}
+	if len(found) == 0 {
+		for _, spec := range agentSpecs {
+			if !m.disabled[spec.kind] {
+				found = append(found, spec.kind)
+			}
 		}
 	}
 	if len(found) == 0 {

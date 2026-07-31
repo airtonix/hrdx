@@ -109,11 +109,11 @@ func TestSidebarHitMapsRows(t *testing.T) {
 
 func TestSidebarScrollClamps(t *testing.T) {
 	model := newTestModel("/tmp/api")
-	model.height = 6 // tiny: sidebar shows 4 rows
+	model.height = 6 // tiny: 4 sidebar rows, two pinned for settings + blank
 	total := len(model.sidebarRows())
 	model.sideScroll = 1000
-	if got := model.sidebarOffset(total); got != total-4 {
-		t.Fatalf("offset = %d, want %d", got, total-4)
+	if got := model.sidebarOffset(total); got != total-2 {
+		t.Fatalf("offset = %d, want %d", got, total-2)
 	}
 	model.sideScroll = -5
 	if got := model.sidebarOffset(total); got != 0 {

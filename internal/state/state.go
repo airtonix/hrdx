@@ -48,6 +48,13 @@ type Workspace struct {
 type State struct {
 	Workspaces []Workspace `json:"workspaces"`
 	Selected   int         `json:"selected"`
+
+	// DisabledAgents lists agent kinds the user switched off in the
+	// settings window; they are hidden from pickers and cycling.
+	DisabledAgents []string `json:"disabled_agents,omitempty"`
+
+	// Sound plays the terminal bell when an agent finishes a turn.
+	Sound bool `json:"sound,omitempty"`
 }
 
 // DefaultPath returns the state file location under the user config dir.

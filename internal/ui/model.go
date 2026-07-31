@@ -34,6 +34,7 @@ const (
 	modeNewSpace
 	modeRename
 	modeMenu
+	modeSettings
 )
 
 // menuItem is one entry of the right-click context menu.
@@ -109,44 +110,49 @@ func (s *space) tab() *tab {
 }
 
 type Model struct {
-	config      Config
-	spaces      []*space
-	selected    int
-	nextID      int
-	width       int
-	height      int
-	mode        inputMode
-	input       textinput.Model
-	status      string
-	kittyPushed bool
-	drag        *splitNode
-	dragFull    rect
-	statePath   string
-	spinFrame   int
-	ticking     bool
-	selPane     *pane
-	selRect     rect
-	statusSeq   int
-	menuPane    *pane
-	menuTab     *tab
-	menuSpace   *space
-	menuAt      rect // menu box in body coordinates
-	menuIndex   int
-	pickItems   []menuItem // kind picker entries while it is open
-	pickAction  string     // "space", "tab", "split-right", "split-down"
-	pickSpace   *space     // tab target for the picker
-	pickPath    string     // directory for a pending new workspace
-	renamePane  *pane
-	renameTab   *tab
-	renameSpace *space
-	branches    map[string]branchInfo
-	completions []string
-	completion  int
-	sideScroll  int
-	dragSpace   *space      // sidebar workspace being dragged for reordering
-	dragMoved   bool        // the drag moved rows: suppress persist-less release
-	hintScroll  int         // first visible hint in the ctrl+b footer row
-	updateInfo  update.Info // populated async; Available drives the notice
+	config        Config
+	spaces        []*space
+	selected      int
+	nextID        int
+	width         int
+	height        int
+	mode          inputMode
+	input         textinput.Model
+	status        string
+	kittyPushed   bool
+	drag          *splitNode
+	dragFull      rect
+	statePath     string
+	spinFrame     int
+	ticking       bool
+	selPane       *pane
+	selRect       rect
+	statusSeq     int
+	menuPane      *pane
+	menuTab       *tab
+	menuSpace     *space
+	menuAt        rect // menu box in body coordinates
+	menuIndex     int
+	pickItems     []menuItem // kind picker entries while it is open
+	pickAction    string     // "space", "tab", "split-right", "split-down", "settings"
+	pickSpace     *space     // tab target for the picker
+	pickPath      string     // directory for a pending new workspace
+	renamePane    *pane
+	renameTab     *tab
+	renameSpace   *space
+	branches      map[string]branchInfo
+	disabled      map[string]bool // agent kinds switched off in settings
+	soundOn       bool            // play a sound when an agent finishes a turn
+	wasBusy       map[int]bool    // pane id -> spinner seen, for the finish sound
+	settingsTab   int             // active tab of the settings window
+	settingsIndex int             // selected row of the settings window
+	completions   []string
+	completion    int
+	sideScroll    int
+	dragSpace     *space      // sidebar workspace being dragged for reordering
+	dragMoved     bool        // the drag moved rows: suppress persist-less release
+	hintScroll    int         // first visible hint in the ctrl+b footer row
+	updateInfo    update.Info // populated async; Available drives the notice
 }
 
 // menuItems returns the entries of the currently open context menu.
@@ -171,6 +177,35 @@ func (m *Model) flashStatus(text string) tea.Cmd {
 	m.statusSeq++
 	seq := m.statusSeq
 	return tea.Tick(2*time.Second, func(time.Time) tea.Msg { return statusExpireMsg{seq: seq} })
+}
+
+// soundConfirmMsg fires a moment after a pane went from busy to idle; the
+// sound only plays when the pane is still idle then, so short redraw gaps
+// in the child's spinner do not ring the bell mid-turn.
+type soundConfirmMsg struct{ id int }
+
+// trackBusy watches one pane's busy state. On a busy -> idle transition it
+// schedules a debounced confirmation before playing the finish sound.
+func (m *Model) trackBusy(target *pane) tea.Cmd {
+	if m.paneBusy(target) {
+		m.wasBusy[target.id] = true
+		return nil
+	}
+	if !m.wasBusy[target.id] {
+		return nil
+	}
+	delete(m.wasBusy, target.id)
+	if !m.soundOn {
+		return nil
+	}
+	id := target.id
+	return tea.Tick(1500*time.Millisecond, func(time.Time) tea.Msg { return soundConfirmMsg{id: id} })
+}
+
+// playFinishSound rings the terminal bell; terminals map it to the system
+// alert sound (or a visual bell) per user preference.
+func playFinishSound() {
+	_, _ = os.Stdout.WriteString("\a")
 }
 
 // spinnerFrames matches zot's own braille spinner.
@@ -230,7 +265,20 @@ func New(config Config, paths []string, statePath string, saved state.State) Mod
 	input.Placeholder = "directory (e.g. ~/Developer/api)"
 	input.Prompt = ""
 
-	model := Model{config: config, input: input, nextID: 1, statePath: statePath, branches: map[string]branchInfo{}}
+	model := Model{config: config, input: input, nextID: 1, statePath: statePath,
+		branches: map[string]branchInfo{}, disabled: map[string]bool{},
+		wasBusy: map[int]bool{}, soundOn: saved.Sound}
+	for _, kind := range saved.DisabledAgents {
+		if isAgentKind(kind) {
+			model.disabled[kind] = true
+		}
+	}
+	// A disabled default agent silently moves to the first enabled one.
+	if model.disabled[model.config.DefaultAgent] {
+		if available := model.availableAgents(); len(available) > 0 {
+			model.config.DefaultAgent = available[0]
+		}
+	}
 	model.restore(saved)
 	for _, path := range paths {
 		exists := false
@@ -467,14 +515,39 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.ticking = true
 			tick = spinTick()
 		}
-		return m, tea.Batch(waitForUpdate(msg.id, target.term.Updates()), tick)
+		return m, tea.Batch(waitForUpdate(msg.id, target.term.Updates()), tick, m.trackBusy(target))
 
 	case spinTickMsg:
+		var sounds []tea.Cmd
+		for _, currentSpace := range m.spaces {
+			for _, currentTab := range currentSpace.tabs {
+				for _, currentPane := range currentTab.panes {
+					sounds = append(sounds, m.trackBusy(currentPane))
+				}
+			}
+		}
 		if m.anyBusy() {
 			m.spinFrame = (m.spinFrame + 1) % len(spinnerFrames)
-			return m, spinTick()
+			sounds = append(sounds, spinTick())
+			return m, tea.Batch(sounds...)
 		}
 		m.ticking = false
+		return m, tea.Batch(sounds...)
+
+	case soundConfirmMsg:
+		target, _ := m.paneByID(msg.id)
+		if target == nil {
+			return m, nil
+		}
+		if m.paneBusy(target) {
+			// Working again already: the pause was a redraw gap, not a
+			// finished turn. trackBusy re-arms the transition.
+			m.wasBusy[msg.id] = true
+			return m, nil
+		}
+		if m.soundOn {
+			playFinishSound()
+		}
 		return m, nil
 
 	case statusExpireMsg:
@@ -595,6 +668,9 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
+
+	case modeSettings:
+		return m.updateSettingsKey(msg)
 
 	case modeMenu:
 		items := m.menuItems()
@@ -724,6 +800,8 @@ func (m Model) runPrefix(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if current := m.currentPane(); current != nil {
 			m.openMenu(current, rect{x: 2, y: 1})
 		}
+	case ",":
+		m.openSettings()
 	case "u", "pgup":
 		m.scrollCurrent(m.pageStep())
 	case "d", "pgdown":
@@ -920,6 +998,35 @@ func (m *Model) closeMenu() {
 	m.pickPath = ""
 }
 
+// toggleAgent flips one agent kind in settings. The last enabled agent
+// cannot be disabled; the default agent follows when it gets disabled.
+func (m *Model) toggleAgent(kind string) tea.Cmd {
+	if !isAgentKind(kind) {
+		return nil
+	}
+	if !m.disabled[kind] {
+		enabled := 0
+		for _, spec := range agentSpecs {
+			if !m.disabled[spec.kind] {
+				enabled++
+			}
+		}
+		if enabled <= 1 {
+			return m.flashStatus("cannot disable the last agent")
+		}
+		m.disabled[kind] = true
+		if m.config.DefaultAgent == kind {
+			if available := m.availableAgents(); len(available) > 0 {
+				m.config.DefaultAgent = available[0]
+			}
+		}
+	} else {
+		delete(m.disabled, kind)
+	}
+	m.persist()
+	return nil
+}
+
 // openKindPicker shows a menu with the installed agents plus shell. The
 // chosen kind feeds the pending action: new workspace, new tab, or split.
 func (m *Model) openKindPicker(action string, target *space, path string, at rect) {
@@ -1065,6 +1172,10 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// never get swallowed silently.
 	if m.mode == modePrefix && msg.Action == tea.MouseActionPress {
 		m.mode = modeTerminal
+	}
+
+	if m.mode == modeSettings {
+		return m.updateSettingsMouse(msg)
 	}
 
 	localX := msg.X - sidebarWidth - 1
@@ -1300,7 +1411,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			delta = 1
 		}
 		total := len(m.sidebarRows())
-		m.sideScroll = clampInt(m.sidebarOffset(total)+delta, 0, max(0, total-max(3, m.height-2)))
+		m.sideScroll = clampInt(m.sidebarOffset(total)+delta, 0, max(0, total-(max(3, m.height-2)-2)))
 		return m, nil
 	}
 
@@ -1338,6 +1449,8 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 	case "new":
 		return m.openNewSpaceInput()
+	case "settings":
+		m.openSettings()
 	}
 	return m, nil
 }
@@ -1554,8 +1667,16 @@ func (m Model) sidebarRows() []sidebarRow {
 }
 
 // sidebarHit maps a body row (header already subtracted) to a sidebar
-// entry, accounting for the sidebar scroll offset.
+// entry, accounting for the sidebar scroll offset. The bottom row is the
+// pinned settings entry.
 func (m Model) sidebarHit(y int) (kind string, index, sub int) {
+	height := max(3, m.height-2)
+	if y == height-2 {
+		return "settings", -1, -1
+	}
+	if y == height-1 {
+		return "", -1, -1
+	}
 	rows := m.sidebarRows()
 	y += m.sidebarOffset(len(rows))
 	if y < 0 || y >= len(rows) {
@@ -1566,8 +1687,10 @@ func (m Model) sidebarHit(y int) (kind string, index, sub int) {
 }
 
 // sidebarOffset clamps the scroll offset to the overflow of the row list.
+// The two bottom sidebar rows are reserved for the pinned settings entry
+// and its trailing blank line (mirroring the blank line at the top).
 func (m Model) sidebarOffset(total int) int {
-	height := max(3, m.height-2)
+	height := max(3, m.height-2) - 2
 	return clampInt(m.sideScroll, 0, max(0, total-height))
 }
 
@@ -1583,6 +1706,11 @@ func (m Model) View() string {
 	if m.mode == modeMenu {
 		rows := strings.Split(body, "\n")
 		m.overlayMenu(rows)
+		body = strings.Join(rows, "\n")
+	}
+	if m.mode == modeSettings {
+		rows := strings.Split(body, "\n")
+		m.overlaySettings(rows)
 		body = strings.Join(rows, "\n")
 	}
 	footer := m.renderFooter()
@@ -1686,18 +1814,22 @@ func (m Model) renderSidebar() string {
 	}
 
 	height := max(3, m.height-2)
-	for len(rows) < height {
+	// The two bottom rows are the pinned settings entry and a trailing
+	// blank line matching the blank line above WORKSPACES.
+	list := height - 2
+	for len(rows) < list {
 		rows = append(rows, "")
 	}
-	rows = rows[:height]
+	rows = rows[:list]
 
 	// Overflow markers so hidden rows are discoverable.
 	if offset > 0 {
 		rows[0] = " " + stylePaneDim.Render("↑ more")
 	}
-	if offset < len(source)-height {
-		rows[height-1] = " " + stylePaneDim.Render("↓ more")
+	if offset < len(source)-list {
+		rows[list-1] = " " + stylePaneDim.Render("↓ more")
 	}
+	rows = append(rows, " "+stylePaneDim.Render("⚙ settings"), "")
 	return lipgloss.NewStyle().
 		Width(sidebarWidth).
 		Height(height).
@@ -1913,6 +2045,9 @@ func (m Model) renderFooter() string {
 	case modeMenu:
 		badge = styleBadgePrefix.Render(" MENU ")
 		body = styleBarMuted.Render(" click or arrows + enter, esc closes")
+	case modeSettings:
+		badge = styleBadgeInput.Render(" SETTINGS ")
+		body = styleBarMuted.Render(" enter toggles, tab switches section, esc closes")
 	case modePrefix:
 		badge = styleBadgePrefix.Render(" CTRL+B ")
 		body = m.prefixHints(m.width - lipgloss.Width(badge))
@@ -1953,6 +2088,7 @@ var prefixHintList = [][2]string{
 	{"=", "equal"},
 	{"u/d", "scroll"},
 	{"x/X", "close"},
+	{",", "settings"},
 	{"q", "quit"},
 }
 

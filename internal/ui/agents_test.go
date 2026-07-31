@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/patriceckhart/hrdx/internal/state"
@@ -42,6 +43,106 @@ func TestInvalidDefaultAgentFallsBack(t *testing.T) {
 	model := New(Config{Shell: "/bin/sh", DefaultAgent: "gemini"}, []string{"/tmp/api"}, "", state.State{})
 	if model.config.DefaultAgent != "zot" {
 		t.Fatalf("default agent = %q, want zot", model.config.DefaultAgent)
+	}
+}
+
+func TestToggleAgentDisablesAndPersistsInSnapshot(t *testing.T) {
+	model := New(Config{Shell: "/bin/sh"}, []string{"/tmp/api"}, "", state.State{})
+
+	model.toggleAgent("claude")
+	if !model.disabled["claude"] {
+		t.Fatal("claude should be disabled after toggle")
+	}
+	for _, kind := range model.availableAgents() {
+		if kind == "claude" {
+			t.Fatal("disabled agent must not be available")
+		}
+	}
+
+	saved := model.snapshot()
+	if len(saved.DisabledAgents) != 1 || saved.DisabledAgents[0] != "claude" {
+		t.Fatalf("snapshot disabled = %v, want [claude]", saved.DisabledAgents)
+	}
+
+	model.toggleAgent("claude")
+	if model.disabled["claude"] {
+		t.Fatal("claude should be enabled after the second toggle")
+	}
+}
+
+func TestToggleAgentKeepsLastEnabled(t *testing.T) {
+	model := New(Config{Shell: "/bin/sh"}, []string{"/tmp/api"}, "", state.State{})
+	model.toggleAgent("pi")
+	model.toggleAgent("claude")
+	model.toggleAgent("codex")
+	if cmd := model.toggleAgent("zot"); cmd == nil {
+		t.Fatal("disabling the last agent should flash a status")
+	}
+	if model.disabled["zot"] {
+		t.Fatal("the last enabled agent must stay enabled")
+	}
+}
+
+func TestDisablingDefaultAgentMovesDefault(t *testing.T) {
+	model := New(Config{Shell: "/bin/sh", DefaultAgent: "zot"}, []string{"/tmp/api"}, "", state.State{})
+	model.toggleAgent("zot")
+	if model.config.DefaultAgent == "zot" {
+		t.Fatalf("default agent = zot, want it moved to an enabled agent")
+	}
+}
+
+func TestRestoreDisabledAgents(t *testing.T) {
+	saved := state.State{DisabledAgents: []string{"pi", "nope"}}
+	model := New(Config{Shell: "/bin/sh"}, []string{"/tmp/api"}, "", saved)
+	if !model.disabled["pi"] {
+		t.Fatal("pi should be restored as disabled")
+	}
+	if model.disabled["nope"] {
+		t.Fatal("unknown kinds must not restore as disabled")
+	}
+}
+
+func TestSettingsRowsShowCheckboxes(t *testing.T) {
+	model := New(Config{Shell: "/bin/sh"}, []string{"/tmp/api"}, "", state.State{})
+	model.toggleAgent("codex")
+	rows := model.settingsRows()
+	if len(rows) != len(agentSpecs) {
+		t.Fatalf("rows = %d, want %d", len(rows), len(agentSpecs))
+	}
+	for _, row := range rows {
+		switch row.action {
+		case "toggle:codex":
+			if !strings.HasPrefix(row.label, "[ ] ") {
+				t.Fatalf("codex label = %q, want unchecked", row.label)
+			}
+		case "toggle:zot":
+			if !strings.HasPrefix(row.label, "[x] ") {
+				t.Fatalf("zot label = %q, want checked", row.label)
+			}
+		}
+	}
+}
+
+func TestSoundToggleRoundTrip(t *testing.T) {
+	model := New(Config{Shell: "/bin/sh"}, []string{"/tmp/api"}, "", state.State{})
+	if model.soundOn {
+		t.Fatal("sound should default to off")
+	}
+	model.settingsTab = 1
+	rows := model.settingsRows()
+	if len(rows) != 1 || rows[0].action != "sound" {
+		t.Fatalf("sound rows = %+v", rows)
+	}
+	model.toggleSettingsRow(rows[0])
+	if !model.soundOn {
+		t.Fatal("sound should be on after toggle")
+	}
+	if !model.snapshot().Sound {
+		t.Fatal("snapshot should carry the sound setting")
+	}
+	restored := New(Config{Shell: "/bin/sh"}, nil, "", model.snapshot())
+	if !restored.soundOn {
+		t.Fatal("restore should keep sound on")
 	}
 }
 
