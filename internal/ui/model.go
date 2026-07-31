@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/patriceckhart/hrdx/internal/api"
+	"github.com/patriceckhart/hrdx/internal/holder"
 	"github.com/patriceckhart/hrdx/internal/state"
 	"github.com/patriceckhart/hrdx/internal/term"
 	"github.com/patriceckhart/hrdx/internal/update"
@@ -82,7 +83,8 @@ type pane struct {
 	term    *term.Pane
 	running bool
 	failure string
-	resume  bool // restored agent pane: relaunch resuming its session
+	resume  bool  // restored agent pane: relaunch resuming its session
+	session int64 // holder session to reattach to on restore, 0 = start fresh
 }
 
 // tab is one tabbed layout of panes inside a workspace.
@@ -156,6 +158,45 @@ type Model struct {
 	hintScroll    int              // first visible hint in the ctrl+b footer row
 	updateInfo    update.Info      // populated async; Available drives the notice
 	events        *api.Broadcaster // API event fan-out, nil-safe
+	holder        *holder.Client   // session holder connection, nil = local panes
+}
+
+// SetHolder wires the session holder client; must be called before the
+// program runs. With a holder, pane processes live in the holder and
+// survive TUI restarts.
+func (m *Model) SetHolder(client *holder.Client) {
+	m.holder = client
+}
+
+// HolderExitMsg reports that a holder session's process exited; send it
+// into the program from the holder client's exit handler.
+type HolderExitMsg struct{ Session int64 }
+
+// gcHolderSessions kills holder sessions no pane references anymore
+// (left over from --fresh starts or corrupted state).
+func (m *Model) gcHolderSessions() {
+	if m.holder == nil {
+		return
+	}
+	referenced := map[int64]bool{}
+	for _, currentSpace := range m.spaces {
+		for _, currentTab := range currentSpace.tabs {
+			for _, currentPane := range currentTab.panes {
+				if currentPane.session != 0 {
+					referenced[currentPane.session] = true
+				}
+			}
+		}
+	}
+	sessions, err := m.holder.List()
+	if err != nil {
+		return
+	}
+	for _, current := range sessions {
+		if !referenced[current.ID] {
+			m.holder.Kill(current.ID)
+		}
+	}
 }
 
 // SetEventBroadcaster wires the API event fan-out; must be called before
@@ -415,6 +456,7 @@ func checkForUpdate(cacheDir, version string) tea.Cmd {
 func (m Model) Init() tea.Cmd {
 	var commands []tea.Cmd
 	commands = append(commands, checkForUpdate(m.config.CacheDir, m.config.Version))
+	m.gcHolderSessions()
 	for _, currentSpace := range m.spaces {
 		for _, currentTab := range currentSpace.tabs {
 			for _, currentPane := range currentTab.panes {
@@ -458,10 +500,46 @@ func (m Model) startPane(owner *space, target *pane) tea.Cmd {
 	}
 	cwd := owner.cwd
 	id := target.id
+
+	if m.holder != nil {
+		client := m.holder
+		reattach := target.session
+		return func() tea.Msg {
+			started, err := startHolderPane(client, reattach, command, args, cwd, cols, rows)
+			return paneStartedMsg{id: id, term: started, err: err}
+		}
+	}
+
 	return func() tea.Msg {
 		started, err := term.Start(command, args, cwd, cols, rows)
 		return paneStartedMsg{id: id, term: started, err: err}
 	}
+}
+
+// startHolderPane starts (or reattaches to) a session in the holder and
+// wires its output into a fresh pane terminal.
+func startHolderPane(client *holder.Client, reattach int64, command string, args []string, cwd string, cols, rows int) (*term.Pane, error) {
+	session := reattach
+	if session == 0 {
+		started, err := client.Start(command, args, cwd, term.PaneEnv(), cols, rows)
+		if err != nil {
+			return nil, err
+		}
+		session = started
+	}
+	pane := term.NewHolderPane(client, session, cols, rows)
+	running, err := client.Attach(session, cols, rows, pane.Feed)
+	if err != nil {
+		if reattach != 0 {
+			// The session vanished (holder restarted): start fresh.
+			return startHolderPane(client, 0, command, args, cwd, cols, rows)
+		}
+		return nil, err
+	}
+	if !running {
+		pane.MarkExited()
+	}
+	return pane, nil
 }
 
 // terminalArea is the local rect of the pane region (right of the sidebar,
@@ -542,7 +620,13 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		target.term = msg.term
-		target.running = true
+		target.running = msg.term.Running()
+		if session := msg.term.HolderSession(); session != 0 && session != target.session {
+			// Holder-backed pane: remember the session id so a restart
+			// reattaches instead of starting fresh.
+			target.session = session
+			m.persist()
+		}
 		m.resizePanes(owner)
 		return m, waitForUpdate(msg.id, msg.term.Updates())
 
@@ -609,6 +693,18 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case api.Request:
 		return m, m.handleAPI(msg)
+
+	case HolderExitMsg:
+		for _, currentSpace := range m.spaces {
+			for _, currentTab := range currentSpace.tabs {
+				for _, currentPane := range currentTab.panes {
+					if currentPane.session == msg.Session && currentPane.term != nil {
+						currentPane.term.MarkExited()
+					}
+				}
+			}
+		}
+		return m, nil
 	}
 
 	// Kitty CSI-u chords (ctrl+1, ...) arrive as unexported messages.
@@ -2269,11 +2365,21 @@ func (m *Model) closeAll() {
 	for _, currentSpace := range m.spaces {
 		for _, currentTab := range currentSpace.tabs {
 			for _, currentPane := range currentTab.panes {
-				if currentPane.term != nil {
-					currentPane.term.Close()
+				if currentPane.term == nil {
+					continue
 				}
+				if m.holder != nil && currentPane.term.HolderSession() != 0 {
+					// Holder-backed: detach and leave the process running
+					// so the next launch reattaches to it.
+					currentPane.term.Detach()
+					continue
+				}
+				currentPane.term.Close()
 			}
 		}
+	}
+	if m.holder != nil {
+		m.holder.Close()
 	}
 }
 

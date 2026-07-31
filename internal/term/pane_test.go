@@ -79,7 +79,7 @@ func TestPaneEnv(t *testing.T) {
 	t.Setenv("HRDX", "stale")
 	t.Setenv("MY_APP_SETTING", "kept")
 
-	env := paneEnv()
+	env := PaneEnv()
 	got := map[string]string{}
 	for _, entry := range env {
 		key, value, _ := strings.Cut(entry, "=")

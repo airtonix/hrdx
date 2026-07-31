@@ -13,6 +13,11 @@ import (
 type Pane struct {
 	Kind string `json:"kind"`
 	Name string `json:"name"`
+
+	// Session is the holder session id owning this pane's PTY; 0 when
+	// the pane was not holder-backed. On restore hrdx reattaches to the
+	// session instead of starting a new process.
+	Session int64 `json:"session,omitempty"`
 }
 
 // Node mirrors the split tree. Leaf nodes reference a pane by its index in

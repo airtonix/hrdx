@@ -21,7 +21,9 @@ func (m *Model) snapshot() state.State {
 			index := make(map[*pane]int, len(currentTab.panes))
 			for i, currentPane := range currentTab.panes {
 				index[currentPane] = i
-				savedTab.Panes = append(savedTab.Panes, state.Pane{Kind: currentPane.kind, Name: currentPane.name})
+				savedTab.Panes = append(savedTab.Panes, state.Pane{
+					Kind: currentPane.kind, Name: currentPane.name, Session: currentPane.session,
+				})
 			}
 			savedTab.Layout = snapshotNode(currentTab.layout, index)
 			ws.Tabs = append(ws.Tabs, savedTab)
@@ -73,10 +75,11 @@ func (m *Model) restore(saved state.State) {
 					kind = "shell"
 				}
 				restoredTab.panes = append(restoredTab.panes, &pane{
-					id:     m.nextID,
-					name:   savedPane.Name,
-					kind:   kind,
-					resume: isAgentKind(kind),
+					id:      m.nextID,
+					name:    savedPane.Name,
+					kind:    kind,
+					resume:  isAgentKind(kind),
+					session: savedPane.Session,
 				})
 				m.nextID++
 			}

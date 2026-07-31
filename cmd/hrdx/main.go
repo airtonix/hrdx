@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/patriceckhart/hrdx/internal/api"
+	"github.com/patriceckhart/hrdx/internal/holder"
 	"github.com/patriceckhart/hrdx/internal/state"
 	"github.com/patriceckhart/hrdx/internal/ui"
 	"github.com/patriceckhart/hrdx/internal/update"
@@ -86,13 +87,28 @@ func main() {
 		case "--version", "-v", "version":
 			fmt.Println("hrdx " + fullVersion())
 			return
+		case "--holder":
+			// Session holder mode: a background process owning every
+			// pane's PTY so sessions survive TUI restarts.
+			holderFlags := flag.NewFlagSet("holder", flag.ExitOnError)
+			holderSocket := holderFlags.String("holder-socket", "", "unix socket to serve on")
+			_ = holderFlags.Parse(os.Args[2:])
+			if *holderSocket == "" {
+				fmt.Fprintln(os.Stderr, "hrdx: --holder requires --holder-socket")
+				os.Exit(2)
+			}
+			if err := holder.NewServer(*holderSocket, resolvedVersion()).Run(); err != nil {
+				fmt.Fprintln(os.Stderr, "hrdx holder:", err)
+				os.Exit(1)
+			}
+			return
 		}
 	}
 
 	var cwd paths
 	var agent, provider, model, reasoning, shell, statePath string
 	var zotBin, piBin, claudeBin, codexBin string
-	var resume, fresh, apiOn bool
+	var resume, fresh, apiOn, persistOn bool
 	flag.Var(&cwd, "cwd", "project directory to open as a workspace (repeatable)")
 	flag.StringVar(&agent, "agent", "zot", "default agent for new panes: zot, pi, claude, codex, or a custom harness kind")
 	flag.StringVar(&provider, "provider", "", "zot provider (zot panes only)")
@@ -107,6 +123,7 @@ func main() {
 	flag.BoolVar(&resume, "continue", false, "resume each agent's latest session")
 	flag.BoolVar(&fresh, "fresh", false, "ignore saved workspaces and start clean")
 	flag.BoolVar(&apiOn, "api", true, "serve the control API on a unix socket next to the state file")
+	flag.BoolVar(&persistOn, "persist", true, "keep pane processes alive across restarts via the session holder")
 	flag.Parse()
 
 	saved := state.State{}
@@ -160,6 +177,20 @@ func main() {
 	modelUI := ui.New(config, cwd, statePath, saved)
 	events := api.NewBroadcaster()
 	modelUI.SetEventBroadcaster(events)
+
+	// Session holder: pane processes live in a small background process
+	// and survive TUI restarts. Attach to a running holder or spawn one.
+	var holderClient *holder.Client
+	if persistOn && statePath != "" {
+		holderSocket := filepath.Join(filepath.Dir(statePath), "holder.sock")
+		client, err := holder.ConnectOrSpawn(holderSocket, resolvedVersion())
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "hrdx: session holder unavailable, panes will not persist:", err)
+		} else {
+			holderClient = client
+			modelUI.SetHolder(client)
+		}
+	}
 	// WithReportFocus: after system sleep the terminal's screen contents
 	// and the renderer's cache can disagree; the focus-regained event on
 	// wake triggers a full repaint (see FocusMsg in the update loop).
@@ -175,6 +206,12 @@ func main() {
 		} else {
 			defer server.Close()
 		}
+	}
+
+	if holderClient != nil {
+		holderClient.SetExitHandler(func(session int64) {
+			program.Send(ui.HolderExitMsg{Session: session})
+		})
 	}
 
 	if _, err := program.Run(); err != nil {

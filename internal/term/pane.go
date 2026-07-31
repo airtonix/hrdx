@@ -16,13 +16,27 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// SessionHost is the holder-side transport of a pane: a background
+// process that owns the PTY so the session survives TUI restarts.
+// Implemented by holder.Client.
+type SessionHost interface {
+	Write(session int64, data []byte)
+	Resize(session int64, cols, rows int)
+	Kill(session int64)
+	Foreground(session int64) string
+}
+
 // Pane is one real terminal session: a subprocess on a PTY whose output is
-// parsed into a virtual screen that the TUI renders as ANSI text.
+// parsed into a virtual screen that the TUI renders as ANSI text. The PTY
+// is either owned locally (pty/cmd) or lives in the session holder
+// (host/session), in which case output arrives via Feed.
 type Pane struct {
 	mu        sync.Mutex
 	vt        vt.Terminal
 	pty       *os.File
 	cmd       *exec.Cmd
+	host      SessionHost
+	session   int64
 	updates   chan struct{}
 	exited    bool
 	kittyKeys bool
@@ -56,7 +70,7 @@ func Start(command string, args []string, cwd string, cols, rows int) (*Pane, er
 
 	cmd := exec.Command(command, args...)
 	cmd.Dir = cwd
-	cmd.Env = paneEnv()
+	cmd.Env = PaneEnv()
 
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
 	if err != nil {
@@ -73,13 +87,67 @@ func Start(command string, args []string, cwd string, cols, rows int) (*Pane, er
 	return pane, nil
 }
 
-// paneEnv builds the environment for pane subprocesses. The outer
+// hostWriter forwards emulator responses (cursor reports etc.) to the
+// holder session's PTY.
+type hostWriter struct {
+	host    SessionHost
+	session int64
+}
+
+func (w hostWriter) Write(p []byte) (int, error) {
+	w.host.Write(w.session, p)
+	return len(p), nil
+}
+
+// NewHolderPane builds a pane whose PTY lives in the session holder.
+// Output must be pushed in via Feed; exit via MarkExited.
+func NewHolderPane(host SessionHost, session int64, cols, rows int) *Pane {
+	if cols < 2 {
+		cols = 80
+	}
+	if rows < 2 {
+		rows = 24
+	}
+	return &Pane{
+		vt:      vt.New(vt.WithSize(cols, rows), vt.WithWriter(hostWriter{host, session})),
+		host:    host,
+		session: session,
+		updates: make(chan struct{}, 1),
+	}
+}
+
+// HolderSession returns the holder session id, 0 for local panes.
+func (p *Pane) HolderSession() int64 { return p.session }
+
+// Feed processes output pushed from the holder. Safe from any goroutine.
+func (p *Pane) Feed(data []byte) {
+	p.mu.Lock()
+	p.scanKeyboardProtocol(data)
+	_, _ = p.vt.Write(data)
+	p.mu.Unlock()
+	p.notify()
+}
+
+// MarkExited flags the subprocess as gone and closes the updates channel.
+// Idempotent, safe from any goroutine.
+func (p *Pane) MarkExited() {
+	p.mu.Lock()
+	if p.exited {
+		p.mu.Unlock()
+		return
+	}
+	p.exited = true
+	p.mu.Unlock()
+	close(p.updates)
+}
+
+// PaneEnv builds the environment for pane subprocesses. The outer
 // terminal's identity is scrubbed so children never detect capabilities
 // (like inline images) that hrdx's character-grid panes cannot deliver;
 // TERM_PROGRAM=vscode makes capability-sniffing TUIs fall back to their
 // conservative rendering path. HRDX=1 announces the multiplexer, like
 // TMUX does, so tools can detect they run inside hrdx.
-func paneEnv() []string {
+func PaneEnv() []string {
 	drop := []string{
 		"TERM=", "TERM_PROGRAM=", "TERM_PROGRAM_VERSION=",
 		"KITTY_WINDOW_ID=", "KITTY_PID=", "KITTY_PUBLIC_KEY=", "KITTY_INSTALLATION_DIR=", "KITTY_LISTEN_ON=",
@@ -128,10 +196,7 @@ func (p *Pane) reader() {
 		}
 	}
 	_ = p.cmd.Wait()
-	p.mu.Lock()
-	p.exited = true
-	p.mu.Unlock()
-	close(p.updates)
+	p.MarkExited()
 }
 
 // scanKeyboardProtocol watches the output stream for kitty keyboard
@@ -171,13 +236,20 @@ func (p *Pane) ForegroundCommand() string {
 		return name
 	}
 	p.fgCheckedAt = time.Now()
-	fd := int(p.pty.Fd())
+	host, session := p.host, p.session
+	var fd int
+	if host == nil {
+		fd = int(p.pty.Fd())
+	}
 	p.mu.Unlock()
 
 	// The PTY master reports the foreground process group of its slave
-	// side; the group leader is the running command.
+	// side; the group leader is the running command. Holder panes ask
+	// the holder, which does the same ioctl on its side.
 	name := ""
-	if pgid, err := unix.IoctlGetInt(fd, unix.TIOCGPGRP); err == nil && pgid > 0 {
+	if host != nil {
+		name = host.Foreground(session)
+	} else if pgid, err := unix.IoctlGetInt(fd, unix.TIOCGPGRP); err == nil && pgid > 0 {
 		name = processName(pgid)
 	}
 
@@ -316,6 +388,10 @@ func (p *Pane) Write(data []byte) {
 	if p.exited {
 		return
 	}
+	if p.host != nil {
+		p.host.Write(p.session, data)
+		return
+	}
 	_, _ = p.pty.Write(data)
 }
 
@@ -330,6 +406,10 @@ func (p *Pane) Resize(cols, rows int) {
 		return
 	}
 	p.vt.Resize(cols, rows)
+	if p.host != nil {
+		p.host.Resize(p.session, cols, rows)
+		return
+	}
 	_ = pty.Setsize(p.pty, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
 }
 
@@ -531,15 +611,26 @@ func (p *Pane) orderedSelection() (startL, startX, endL, endX int) {
 	return startL, startX, endL, endX
 }
 
-// Close terminates the subprocess and releases the PTY.
+// Close terminates the subprocess and releases the PTY. For holder
+// panes the session is killed in the holder.
 func (p *Pane) Close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.exited {
 		return
 	}
+	if p.host != nil {
+		p.host.Kill(p.session)
+		return
+	}
 	if p.cmd.Process != nil {
 		_ = p.cmd.Process.Kill()
 	}
 	_ = p.pty.Close()
+}
+
+// Detach releases the pane's local resources without touching the
+// remote session; used when the TUI quits but the holder keeps running.
+func (p *Pane) Detach() {
+	p.MarkExited()
 }
