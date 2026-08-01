@@ -3,8 +3,8 @@
 # hrdx installer.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/patriceckhart/hrdx/main/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/patriceckhart/hrdx/main/install.sh | bash -s -- v0.0.1 ~/bin
+#   curl -fsSL https://www.hrdx.dev/install.sh | bash
+#   curl -fsSL https://www.hrdx.dev/install.sh | bash -s -- v0.0.1 ~/bin
 #
 # Positional arguments:
 #   $1  version    - release tag (e.g. v0.0.1). Defaults to "latest".

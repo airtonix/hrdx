@@ -80,7 +80,7 @@ release:
     one-liner install:
 
     ```bash
-    curl -fsSL https://raw.githubusercontent.com/patriceckhart/hrdx/main/install.sh | bash
+    curl -fsSL https://www.hrdx.dev/install.sh | bash
     ```
 
     or download a binary below, `chmod +x`, and drop it on your `$PATH`.

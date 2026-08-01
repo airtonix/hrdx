@@ -15,7 +15,7 @@ hrdx is a experimental, minimal and lightweight terminal multiplexer built for t
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/patriceckhart/hrdx/main/install.sh | bash
+curl -fsSL https://www.hrdx.dev/install.sh | bash
 ```
 
 macOS or Linux, plus at least one agent CLI on your PATH: `codex`, `claude`, `pi` or `zot`. Update any time with `hrdx update`.
