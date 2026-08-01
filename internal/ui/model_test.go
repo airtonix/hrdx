@@ -4,8 +4,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/patriceckhart/hrdx/internal/state"
 )
 
@@ -104,6 +106,57 @@ func TestSidebarHitMapsRows(t *testing.T) {
 	kind, _, _ = model.sidebarHit(7)
 	if kind != "new" {
 		t.Fatalf("row 7 = %q, want new", kind)
+	}
+}
+
+func TestBranchAlignsWithWorkspaceName(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	model.branches["/tmp/api"] = branchInfo{value: "main", checked: time.Now()}
+	rows := model.sidebarRows()
+	branchRow := rows[3]
+	if leading := len(branchRow.label) - len(strings.TrimLeft(branchRow.label, " ")); leading != 2 {
+		t.Fatalf("branch indentation = %d, want 2 to align with workspace name", leading)
+	}
+}
+
+func TestWorkspacePaneRowsUseStaticStateIcons(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	rows := model.sidebarRows()
+	workspacePane := rows[3]
+	if !strings.Contains(workspacePane.label, "○") {
+		t.Fatalf("workspace pane row has no state bullet: %q", workspacePane.label)
+	}
+	for _, frame := range spinnerFrames {
+		if strings.Contains(workspacePane.label, frame) {
+			t.Fatalf("workspace pane row contains an animated spinner: %q", workspacePane.label)
+		}
+	}
+
+	target := &pane{running: true}
+	if got, want := paneStateIcon(target, true, false, 0), styleDotBusy.Render("●"); got != want {
+		t.Fatalf("busy workspace icon = %q, want static busy bullet %q", got, want)
+	}
+	if got, want := paneStateIcon(target, true, true, 0), styleDotBusy.Render(spinnerFrames[0]); got != want {
+		t.Fatalf("busy agent icon = %q, want animated spinner %q", got, want)
+	}
+}
+
+func TestFooterShowsAgentSummaryOnRight(t *testing.T) {
+	model := newTestModel("/tmp/api", "/tmp/web")
+	if got := model.agentSummary(); got != "2 agents | 0 busy" {
+		t.Fatalf("agentSummary = %q, want 2 agents | 0 busy", got)
+	}
+	footer := model.renderFooter()
+	if !strings.Contains(footer, "2 agents | 0 busy") {
+		t.Fatalf("footer missing agent summary: %q", footer)
+	}
+	if width := lipgloss.Width(footer); width != model.width {
+		t.Fatalf("footer width = %d, want %d", width, model.width)
+	}
+
+	single := newTestModel("/tmp/api")
+	if got := single.agentSummary(); got != "1 agent | 0 busy" {
+		t.Fatalf("singular agentSummary = %q", got)
 	}
 }
 

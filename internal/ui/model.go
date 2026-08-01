@@ -1748,11 +1748,22 @@ func (m Model) paneBusy(currentPane *pane) bool {
 }
 
 func (m Model) paneIcon(currentPane *pane) string {
+	return paneStateIcon(currentPane, m.paneBusy(currentPane), true, m.spinFrame)
+}
+
+func (m Model) workspacePaneIcon(currentPane *pane) string {
+	return paneStateIcon(currentPane, m.paneBusy(currentPane), false, m.spinFrame)
+}
+
+func paneStateIcon(currentPane *pane, busy, animate bool, frame int) string {
 	if currentPane.failure != "" {
 		return styleDotOff.Render("!")
 	}
-	if m.paneBusy(currentPane) {
-		return styleDotBusy.Render(spinnerFrames[m.spinFrame])
+	if busy {
+		if animate {
+			return styleDotBusy.Render(spinnerFrames[frame])
+		}
+		return styleDotBusy.Render("●")
 	}
 	if currentPane.running {
 		return styleDotOn.Render("●")
@@ -1796,7 +1807,7 @@ func (m Model) sidebarRows() []sidebarRow {
 				suffixWidth += lipgloss.Width(text)
 			}
 			rows = append(rows, sidebarRow{
-				label: "    " + stylePaneDim.Render(truncate(branch.value, sidebarWidth-6-suffixWidth)) + suffix,
+				label: "  " + stylePaneDim.Render(truncate(branch.value, sidebarWidth-4-suffixWidth)) + suffix,
 				kind:  "space", space: spaceIndex, pane: -1,
 			})
 		}
@@ -1812,7 +1823,7 @@ func (m Model) sidebarRows() []sidebarRow {
 					nameLabel = stylePaneSel.Render(name)
 				}
 				rows = append(rows, sidebarRow{
-					label: "    " + m.paneIcon(currentPane) + " " + nameLabel,
+					label: "    " + m.workspacePaneIcon(currentPane) + " " + nameLabel,
 					kind:  "pane", space: spaceIndex, pane: flat,
 				})
 				flat++
@@ -2252,6 +2263,7 @@ func placeholderLines(r rect, message string) []string {
 }
 
 func (m Model) renderFooter() string {
+	right := styleBarMuted.Render(" " + m.agentSummary() + " ")
 	var badge, body string
 	switch m.mode {
 	case modeNewSpace:
@@ -2280,7 +2292,7 @@ func (m Model) renderFooter() string {
 		body = styleBarMuted.Render(" enter toggles, tab switches section, esc closes")
 	case modePrefix:
 		badge = styleBadgePrefix.Render(" CTRL+B ")
-		body = m.prefixHints(m.width - lipgloss.Width(badge))
+		body = m.prefixHints(m.width - lipgloss.Width(badge) - lipgloss.Width(right))
 	default:
 		badge = styleBadgeTerm.Render(" TERM ")
 		body = styleBarMuted.Render(" ctrl+b commands")
@@ -2303,11 +2315,33 @@ func (m Model) renderFooter() string {
 		}
 		body += style.Render("  " + m.status)
 	}
-	gap := m.width - lipgloss.Width(badge) - lipgloss.Width(body)
+	gap := m.width - lipgloss.Width(badge) - lipgloss.Width(body) - lipgloss.Width(right)
 	if gap < 0 {
 		gap = 0
 	}
-	return badge + body + styleBar.Render(strings.Repeat(" ", gap))
+	return badge + body + styleBar.Render(strings.Repeat(" ", gap)) + right
+}
+
+func (m Model) agentSummary() string {
+	agents, busy := 0, 0
+	for _, currentSpace := range m.spaces {
+		for _, currentTab := range currentSpace.tabs {
+			for _, currentPane := range currentTab.panes {
+				if m.paneAgentKind(currentPane) == "" {
+					continue
+				}
+				agents++
+				if m.paneBusy(currentPane) {
+					busy++
+				}
+			}
+		}
+	}
+	label := "agents"
+	if agents == 1 {
+		label = "agent"
+	}
+	return fmt.Sprintf("%d %s | %d busy", agents, label, busy)
 }
 
 var prefixHintList = [][2]string{
