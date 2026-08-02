@@ -434,6 +434,14 @@ func (p *Pane) AppCursor() bool {
 	return p.vt.Mode()&vt.ModeAppCursor != 0
 }
 
+// BracketedPaste reports whether the subprocess enabled bracketed paste
+// mode (DECSET 2004), so pastes can be wrapped in ESC[200~ / ESC[201~.
+func (p *Pane) BracketedPaste() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.vt.Mode()&vt.ModeBracketedPaste != 0
+}
+
 // MouseEnabled reports whether the subprocess asked for mouse reporting.
 func (p *Pane) MouseEnabled() bool {
 	p.mu.Lock()

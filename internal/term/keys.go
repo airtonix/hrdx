@@ -2,6 +2,16 @@ package term
 
 import tea "github.com/charmbracelet/bubbletea"
 
+// EncodePaste translates pasted text into the bytes a real terminal would
+// send to the child. When bracketed paste is enabled, the text is wrapped in
+// ESC[200~ / ESC[201~ so embedded newlines are not mistaken for Enter.
+func EncodePaste(text string, bracketed bool) []byte {
+	if bracketed {
+		return []byte("\x1b[200~" + text + "\x1b[201~")
+	}
+	return []byte(text)
+}
+
 // EncodeKey translates a Bubble Tea key press into the byte sequence a real
 // terminal would send. appCursor selects SS3 arrow encodings (DECCKM).
 func EncodeKey(msg tea.KeyMsg, appCursor bool) []byte {

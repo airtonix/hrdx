@@ -160,6 +160,26 @@ func TestForegroundCommand(t *testing.T) {
 	}
 }
 
+func TestEncodePaste(t *testing.T) {
+	if got := string(EncodePaste("hello\nworld\r\n", false)); got != "hello\nworld\r\n" {
+		t.Fatalf("plain paste = %q", got)
+	}
+	if got := string(EncodePaste("hi\nthere", true)); got != "\x1b[200~hi\nthere\x1b[201~" {
+		t.Fatalf("bracketed paste = %q", got)
+	}
+}
+
+func TestBracketedPasteMode(t *testing.T) {
+	pane := startShellPane(t, "printf '\\033[?2004h'; sleep 5")
+	deadline := time.Now().Add(3 * time.Second)
+	for !pane.BracketedPaste() {
+		if time.Now().After(deadline) {
+			t.Fatal("pane never reported bracketed paste mode")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func stripANSI(value string) string {
 	var out strings.Builder
 	inEscape := false

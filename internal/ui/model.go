@@ -804,6 +804,11 @@ func (m Model) updateRaw(raw []byte) (tea.Model, tea.Cmd) {
 	}
 	if legacy := legacyEncode(code, mods); len(legacy) > 0 {
 		current.term.Write(legacy)
+	} else {
+		// Modified keys such as ctrl+1 have no classic terminal encoding.
+		// Preserve their CSI-u sequence even if the child's kitty protocol
+		// enable sequence was missed during a session reattach.
+		current.term.Write(raw)
 	}
 	return m, nil
 }
@@ -945,7 +950,14 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if current := m.currentPane(); current != nil && current.term != nil && current.running {
-			current.term.Write(term.EncodeKey(msg, current.term.AppCursor()))
+			if msg.Paste {
+				// Agent TUIs support bracketed paste. Prefer it for agents even
+				// when their one-time DECSET 2004 sequence was missed on reattach.
+				bracketed := current.term.BracketedPaste() || m.paneAgentKind(current) != ""
+				current.term.Write(term.EncodePaste(string(msg.Runes), bracketed))
+			} else {
+				current.term.Write(term.EncodeKey(msg, current.term.AppCursor()))
+			}
 		}
 		return m, nil
 	}

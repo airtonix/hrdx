@@ -50,6 +50,7 @@ const (
 	ModeFocus
 	ModeMouseX10
 	ModeMouseMany
+	ModeBracketedPaste
 	ModeMouseMask = ModeMouseButton | ModeMouseMotion | ModeMouseX10 | ModeMouseMany
 )
 
@@ -592,6 +593,8 @@ func (t *State) setMode(priv bool, set bool, args []int) {
 				t.modMode(set, ModeMouseMany)
 			case 1004: // send focus events to tty
 				t.modMode(set, ModeFocus)
+			case 2004: // bracketed paste mode
+				t.modMode(set, ModeBracketedPaste)
 			case 1006: // extended reporting mode
 				t.modMode(set, ModeMouseSgr)
 			case 1034:
