@@ -51,6 +51,10 @@ type View interface {
 	// HistoryLen returns the number of scrollback lines (lock held).
 	HistoryLen() int
 
+	// HistorySerial returns the total number of lines added to scrollback
+	// (lock held), including lines added after the history cap is reached.
+	HistorySerial() uint64
+
 	// HistoryLine returns one scrollback line, oldest first (lock held).
 	HistoryLine(index int) []Glyph
 

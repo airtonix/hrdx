@@ -105,8 +105,9 @@ type State struct {
 
 	// history holds lines that scrolled off the top of the primary screen
 	// (never the alt screen), newest last, capped at historyLimit.
-	history      [][]Glyph
-	historyLimit int
+	history       [][]Glyph
+	historyLimit  int
+	historySerial uint64 // increments for every line added, including at the cap
 }
 
 // historyDefaultLimit caps the scrollback buffer.
@@ -124,6 +125,7 @@ func (t *State) pushHistory(line []Glyph) {
 	copied := make([]Glyph, len(line))
 	copy(copied, line)
 	t.history = append(t.history, copied)
+	t.historySerial++
 	if len(t.history) > t.historyLimit {
 		t.history = t.history[len(t.history)-t.historyLimit:]
 	}
@@ -133,6 +135,13 @@ func (t *State) pushHistory(line []Glyph) {
 // hold the state lock, like Cell.
 func (t *State) HistoryLen() int {
 	return len(t.history)
+}
+
+// HistorySerial returns the total number of lines added to scrollback.
+// Unlike HistoryLen, it continues increasing after the history cap is hit.
+// Callers must hold the state lock.
+func (t *State) HistorySerial() uint64 {
+	return t.historySerial
 }
 
 // HistoryLine returns scrollback line index (0 is the oldest). The returned

@@ -123,7 +123,7 @@ func (p *Pane) HolderSession() int64 { return p.session }
 func (p *Pane) Feed(data []byte) {
 	p.mu.Lock()
 	p.scanKeyboardProtocol(data)
-	_, _ = p.vt.Write(data)
+	p.writeOutput(data)
 	p.mu.Unlock()
 	p.notify()
 }
@@ -187,7 +187,7 @@ func (p *Pane) reader() {
 		if n > 0 {
 			p.mu.Lock()
 			p.scanKeyboardProtocol(buffer[:n])
-			_, _ = p.vt.Write(buffer[:n])
+			p.writeOutput(buffer[:n])
 			p.mu.Unlock()
 			p.notify()
 		}
@@ -197,6 +197,27 @@ func (p *Pane) reader() {
 	}
 	_ = p.cmd.Wait()
 	p.MarkExited()
+}
+
+// writeOutput applies child output while preserving the user's scrollback
+// position. New output adds history lines below the viewed window, so the
+// offset must grow by the same amount. HistorySerial still advances after
+// the bounded history buffer reaches its cap.
+//
+// p.mu must be held by the caller.
+func (p *Pane) writeOutput(data []byte) {
+	p.vt.Lock()
+	before := p.vt.HistorySerial()
+	p.vt.Unlock()
+	_, _ = p.vt.Write(data)
+	if p.scrollOffset == 0 {
+		return
+	}
+	p.vt.Lock()
+	after := p.vt.HistorySerial()
+	limit := p.vt.HistoryLen()
+	p.vt.Unlock()
+	p.scrollOffset = min(limit, p.scrollOffset+int(after-before))
 }
 
 // scanKeyboardProtocol watches the output stream for kitty keyboard

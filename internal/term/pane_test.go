@@ -1,6 +1,7 @@
 package term
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -32,10 +33,14 @@ func waitExit(t *testing.T, pane *Pane) {
 }
 
 func TestScrollbackAndSelection(t *testing.T) {
-	pane := startShellPane(t, "for i in $(seq 1 20); do echo line-$i; done")
-	waitExit(t, pane)
+	pane := startShellPane(t, "sleep 30")
+	var initial strings.Builder
+	for i := 1; i <= 20; i++ {
+		fmt.Fprintf(&initial, "line-%d\n", i)
+	}
+	pane.Feed([]byte(initial.String()))
 
-	// 20 lines + prompt rows on a 6-row screen must have filled history.
+	// 20 lines on a 6-row screen must have filled history.
 	if pane.Scroll(1000) == false {
 		t.Fatal("expected scrollback to be available")
 	}
@@ -49,12 +54,18 @@ func TestScrollbackAndSelection(t *testing.T) {
 		t.Fatalf("scrolled view missing early output:\n%s", stripANSI(top))
 	}
 
+	// Output arriving while scrolled back must not move the visible window.
+	pane.Feed([]byte("later-1\nlater-2\nlater-3\nlater-4\nlater-5\nlater-6\n"))
+	if got := pane.Render(false); got != top {
+		t.Fatalf("scrollback view shifted after new output:\nwant %s\ngot  %s", stripANSI(top), stripANSI(got))
+	}
+
 	pane.ResetScroll()
 	if pane.ScrollOffset() != 0 {
 		t.Fatal("ResetScroll did not reset")
 	}
 	live := stripANSI(pane.Render(false))
-	if !strings.Contains(live, "line-20") {
+	if !strings.Contains(live, "later-6") {
 		t.Fatalf("live view missing latest output:\n%s", live)
 	}
 
@@ -63,7 +74,7 @@ func TestScrollbackAndSelection(t *testing.T) {
 	pane.ExtendSelection(39, 1)
 	pane.FinishSelection()
 	text := pane.SelectionText()
-	if !strings.Contains(text, "line-") {
+	if !strings.Contains(text, "later-") {
 		t.Fatalf("selection text = %q", text)
 	}
 	pane.ClearSelection()
