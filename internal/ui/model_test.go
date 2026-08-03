@@ -400,20 +400,24 @@ func TestTruncate(t *testing.T) {
 	}
 }
 
-func TestPaneMenuHidesCloseForOnlyPane(t *testing.T) {
+func TestPaneMenuHidesCloseForOnlyPaneInTab(t *testing.T) {
 	model := newTestModel("/tmp/api")
 	currentSpace := model.spaces[0]
-	model.menuPane = currentSpace.tab().panes[0]
+	target := currentSpace.tab().panes[0]
+	model.menuPane = target
 
+	// Panes in other tabs do not make the target pane closable.
+	model.addTab(currentSpace, "zot")
 	for _, item := range model.menuItems() {
 		if item.action == "close" {
-			t.Fatal("close pane should be hidden when the workspace has only one pane")
+			t.Fatal("close pane should be hidden when its tab has only one pane")
 		}
 	}
 
+	currentSpace.active = 0
 	model.addPane(currentSpace, "shell", true)
 	if items := model.menuItems(); items[len(items)-1].action != "close" {
-		t.Fatal("close pane should be available when another pane is open")
+		t.Fatal("close pane should be available when another pane is open in the same tab")
 	}
 }
 

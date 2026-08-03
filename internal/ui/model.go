@@ -227,19 +227,24 @@ func (m Model) menuItems() []menuItem {
 		return tabMenuItems
 	}
 	if m.menuPane != nil {
-		if _, owner := m.paneByID(m.menuPane.id); owner != nil && spacePaneCount(owner) == 1 {
+		if owner := m.tabByPaneID(m.menuPane.id); owner != nil && len(owner.panes) == 1 {
 			return paneMenuItems[:len(paneMenuItems)-1]
 		}
 	}
 	return paneMenuItems
 }
 
-func spacePaneCount(owner *space) int {
-	count := 0
-	for _, currentTab := range owner.tabs {
-		count += len(currentTab.panes)
+func (m Model) tabByPaneID(id int) *tab {
+	for _, currentSpace := range m.spaces {
+		for _, currentTab := range currentSpace.tabs {
+			for _, currentPane := range currentTab.panes {
+				if currentPane.id == id {
+					return currentTab
+				}
+			}
+		}
 	}
-	return count
+	return nil
 }
 
 type statusExpireMsg struct{ seq int }
