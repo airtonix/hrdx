@@ -5,18 +5,17 @@ package vt
 
 import (
 	"bufio"
-	"bytes"
-	"io"
 	"unicode"
 	"unicode/utf8"
 )
 
 type terminal struct {
 	*State
+	utf8Pending []byte
 }
 
 func newTerminal(info TerminalInfo) *terminal {
-	t := &terminal{newState(info.w)}
+	t := &terminal{State: newState(info.w)}
 	t.init(info.cols, info.rows)
 	return t
 }
@@ -31,30 +30,28 @@ func (t *terminal) init(cols, rows int) {
 }
 
 func (t *terminal) Write(p []byte) (int, error) {
-	var written int
-	r := bytes.NewReader(p)
 	t.lock()
 	defer t.unlock()
-	for {
-		c, sz, err := r.ReadRune()
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return written, err
+
+	data := make([]byte, 0, len(t.utf8Pending)+len(p))
+	data = append(data, t.utf8Pending...)
+	data = append(data, p...)
+	t.utf8Pending = t.utf8Pending[:0]
+
+	for len(data) > 0 {
+		if !utf8.FullRune(data) {
+			t.utf8Pending = append(t.utf8Pending, data...)
+			break
 		}
-		written += sz
-		if c == unicode.ReplacementChar && sz == 1 {
-			if r.Len() == 0 {
-				// not enough bytes for a full rune
-				return written - 1, nil
-			}
+		c, size := utf8.DecodeRune(data)
+		data = data[size:]
+		if c == unicode.ReplacementChar && size == 1 {
 			t.logln("invalid utf8 sequence")
 			continue
 		}
 		t.put(c)
 	}
-	return written, nil
+	return len(p), nil
 }
 
 // TODO: add tests for expected blocking behavior

@@ -224,6 +224,9 @@ func (m Model) menuItems() []menuItem {
 		return spaceMenuItems
 	}
 	if m.menuTab != nil {
+		if owner := m.spaceByTab(m.menuTab); owner != nil && len(owner.tabs) == 1 {
+			return tabMenuItems[:len(tabMenuItems)-1]
+		}
 		return tabMenuItems
 	}
 	if m.menuPane != nil {
@@ -232,6 +235,17 @@ func (m Model) menuItems() []menuItem {
 		}
 	}
 	return paneMenuItems
+}
+
+func (m Model) spaceByTab(target *tab) *space {
+	for _, currentSpace := range m.spaces {
+		for _, currentTab := range currentSpace.tabs {
+			if currentTab == target {
+				return currentSpace
+			}
+		}
+	}
+	return nil
 }
 
 func (m Model) tabByPaneID(id int) *tab {

@@ -18,6 +18,8 @@ const (
 	attrItalic
 	attrBlink
 	attrWrap
+	attrWide
+	attrWideDummy
 )
 
 const (
@@ -51,6 +53,7 @@ const (
 	ModeMouseX10
 	ModeMouseMany
 	ModeBracketedPaste
+	ModeSynchronizedOutput
 	ModeMouseMask = ModeMouseButton | ModeMouseMotion | ModeMouseX10 | ModeMouseMany
 )
 
@@ -312,6 +315,29 @@ var gfxCharTable = [62]rune{
 	'│', '≤', '≥', 'π', '≠', '£', '·', // x - ~
 }
 
+// clearWideAt removes both cells of a wide glyph intersecting x. Terminal
+// applications commonly redraw only part of a line, so leaving the other
+// half behind would make the rendered line one cell too wide or too narrow.
+func (t *State) clearWideAt(x, y int) {
+	if x < 0 || x >= t.cols || y < 0 || y >= t.rows {
+		return
+	}
+	blank := func(column int) {
+		t.lines[y][column] = t.cur.Attr
+		t.lines[y][column].Char = ' '
+		t.lines[y][column].Mode &^= attrWide | attrWideDummy
+	}
+	current := t.lines[y][x]
+	if current.Mode&attrWideDummy != 0 && x > 0 && t.lines[y][x-1].Mode&attrWide != 0 {
+		blank(x - 1)
+	}
+	if current.Mode&attrWide != 0 && x+1 < t.cols && t.lines[y][x+1].Mode&attrWideDummy != 0 {
+		blank(x + 1)
+	}
+	t.changed |= ChangedScreen
+	t.dirty[y] = true
+}
+
 func (t *State) setChar(c rune, attr *Glyph, x, y int) {
 	if attr.Mode&attrGfx != 0 {
 		if c >= 0x41 && c <= 0x7e && gfxCharTable[c-0x41] != 0 {
@@ -427,6 +453,8 @@ func (t *State) clear(x0, y0, x1, y1 int) {
 	y1 = clamp(y1, 0, t.rows-1)
 	t.changed |= ChangedScreen
 	for y := y0; y <= y1; y++ {
+		t.clearWideAt(x0, y)
+		t.clearWideAt(x1, y)
 		t.dirty[y] = true
 		for x := x0; x <= x1; x++ {
 			t.lines[y][x] = t.cur.Attr
@@ -604,6 +632,8 @@ func (t *State) setMode(priv bool, set bool, args []int) {
 				t.modMode(set, ModeFocus)
 			case 2004: // bracketed paste mode
 				t.modMode(set, ModeBracketedPaste)
+			case 2026: // synchronized output
+				t.modMode(set, ModeSynchronizedOutput)
 			case 1006: // extended reporting mode
 				t.modMode(set, ModeMouseSgr)
 			case 1034:

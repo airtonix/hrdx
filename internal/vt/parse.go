@@ -1,5 +1,7 @@
 package vt
 
+import "github.com/mattn/go-runewidth"
+
 func isControlCode(c rune) bool {
 	return c < 0x20 || c == 0177
 }
@@ -18,15 +20,45 @@ func (t *State) parse(c rune) {
 		t.newline(true)
 	}
 
-	if t.mode&ModeInsert != 0 && t.cur.X+1 < t.cols {
+	width := runewidth.RuneWidth(c)
+	if width == 0 {
+		// A Glyph stores one rune, so combining marks cannot be retained yet.
+		// They must not consume a terminal cell or shift subsequent drawing.
+		return
+	}
+	if width > 2 {
+		width = 1
+	}
+	if width == 2 && t.cur.X == t.cols-1 && t.mode&ModeWrap != 0 {
+		t.lines[t.cur.Y][t.cur.X].Mode |= attrWrap
+		t.newline(true)
+	}
+
+	if t.mode&ModeInsert != 0 && t.cur.X+width < t.cols {
 		// TODO: move shiz, look at st.c:2458
 		t.logln("insert mode not implemented")
 	}
 
-	t.setChar(c, &t.cur.Attr, t.cur.X, t.cur.Y)
-	if t.cur.X+1 < t.cols {
-		t.moveTo(t.cur.X+1, t.cur.Y)
+	t.clearWideAt(t.cur.X, t.cur.Y)
+	if width == 2 && t.cur.X+1 < t.cols {
+		t.clearWideAt(t.cur.X+1, t.cur.Y)
+	}
+
+	attr := t.cur.Attr
+	if width == 2 && t.cur.X+1 < t.cols {
+		attr.Mode |= attrWide
+	}
+	t.setChar(c, &attr, t.cur.X, t.cur.Y)
+	if width == 2 && t.cur.X+1 < t.cols {
+		dummy := t.cur.Attr
+		dummy.Mode |= attrWideDummy
+		t.setChar(0, &dummy, t.cur.X+1, t.cur.Y)
+	}
+	next := t.cur.X + width
+	if next < t.cols {
+		t.moveTo(next, t.cur.Y)
 	} else {
+		t.cur.X = t.cols - 1
 		t.cur.State |= cursorWrapNext
 	}
 }

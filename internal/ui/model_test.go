@@ -400,6 +400,23 @@ func TestTruncate(t *testing.T) {
 	}
 }
 
+func TestTabMenuHidesCloseForOnlyTab(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	currentSpace := model.spaces[0]
+	model.menuTab = currentSpace.tab()
+
+	for _, item := range model.menuItems() {
+		if item.action == "tab-close" {
+			t.Fatal("close tab should be hidden when the workspace has only one tab")
+		}
+	}
+
+	model.addTab(currentSpace, "zot")
+	if items := model.menuItems(); items[len(items)-1].action != "tab-close" {
+		t.Fatal("close tab should be available when another tab is open")
+	}
+}
+
 func TestPaneMenuHidesCloseForOnlyPaneInTab(t *testing.T) {
 	model := newTestModel("/tmp/api")
 	currentSpace := model.spaces[0]

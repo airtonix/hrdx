@@ -124,8 +124,11 @@ func (p *Pane) Feed(data []byte) {
 	p.mu.Lock()
 	p.scanKeyboardProtocol(data)
 	p.writeOutput(data)
+	synchronized := p.synchronizedOutput()
 	p.mu.Unlock()
-	p.notify()
+	if !synchronized {
+		p.notify()
+	}
 }
 
 // MarkExited flags the subprocess as gone and closes the updates channel.
@@ -188,8 +191,11 @@ func (p *Pane) reader() {
 			p.mu.Lock()
 			p.scanKeyboardProtocol(buffer[:n])
 			p.writeOutput(buffer[:n])
+			synchronized := p.synchronizedOutput()
 			p.mu.Unlock()
-			p.notify()
+			if !synchronized {
+				p.notify()
+			}
 		}
 		if err != nil {
 			break
@@ -218,6 +224,16 @@ func (p *Pane) writeOutput(data []byte) {
 	limit := p.vt.HistoryLen()
 	p.vt.Unlock()
 	p.scrollOffset = min(limit, p.scrollOffset+int(after-before))
+}
+
+// synchronizedOutput reports whether the child is inside a DEC mode 2026
+// atomic output frame. Suppressing intermediate notifications prevents the
+// outer renderer from displaying a partially written child frame.
+// p.mu must be held by the caller.
+func (p *Pane) synchronizedOutput() bool {
+	p.vt.Lock()
+	defer p.vt.Unlock()
+	return p.vt.Mode()&vt.ModeSynchronizedOutput != 0
 }
 
 // scanKeyboardProtocol watches the output stream for kitty keyboard

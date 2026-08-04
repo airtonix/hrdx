@@ -14,6 +14,7 @@ const (
 	attrBold      = 1 << 2
 	attrItalic    = 1 << 4
 	attrBlink     = 1 << 5
+	attrWideDummy = 1 << 8
 )
 
 // RenderLines returns the current view as ANSI-styled text, one string per
@@ -69,6 +70,11 @@ func (p *Pane) RenderLines(focused bool) []string {
 				glyph = p.vt.Cell(x, onScreenRow)
 			default:
 				glyph = vt.Glyph{Char: ' ', FG: vt.DefaultFG, BG: vt.DefaultBG}
+			}
+
+			// The preceding wide rune already occupies this host cell.
+			if glyph.Mode&attrWideDummy != 0 {
+				continue
 			}
 
 			if selEndL >= 0 && inSelection(lineIndex, x, selStartL, selStartX, selEndL, selEndX) {
