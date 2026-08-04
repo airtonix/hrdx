@@ -77,9 +77,11 @@ func (t *State) handleCSI() {
 		t.moveTo(t.cur.X, t.cur.Y-c.maxarg(0, 1))
 	case 'B', 'e': // CUD, VPR - cursor <n> down
 		t.moveTo(t.cur.X, t.cur.Y+c.maxarg(0, 1))
-	case 'c': // DA - device attributes
-		if c.arg(0, 0) == 0 {
-			// TODO: write vt102 id
+	case 'c': // DA1 - primary device attributes
+		if !c.priv && c.arg(0, 0) == 0 {
+			// Identify as a VT100 with the advanced video option. Shells such
+			// as fish query this during startup and wait if no reply arrives.
+			_, _ = t.w.Write([]byte("\033[?1;2c"))
 		}
 	case 'C', 'a': // CUF, HPR - cursor <n> forward
 		t.moveTo(t.cur.X+c.maxarg(0, 1), t.cur.Y)

@@ -1,6 +1,20 @@
 package vt
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
+
+func TestPrimaryDeviceAttributesResponse(t *testing.T) {
+	var response bytes.Buffer
+	terminal := New(WithSize(8, 2), WithWriter(&response))
+	if _, err := terminal.Write([]byte("\x1b[c")); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := response.String(), "\x1b[?1;2c"; got != want {
+		t.Fatalf("device attributes response = %q, want %q", got, want)
+	}
+}
 
 func TestWriteBuffersUTF8RunesSplitAcrossCalls(t *testing.T) {
 	input := []byte("└──┘")
