@@ -164,6 +164,7 @@ type Model struct {
 	events        *api.Broadcaster // API event fan-out, nil-safe
 	holder        *holder.Client   // session holder connection, nil = local panes
 	blurredAt     time.Time        // when the terminal lost focus, for stale detection
+	cursorSink    *CursorSink      // publishes the hardware cursor position, nil-safe
 }
 
 // staleAfter is how long the terminal must have been unfocused before a
@@ -176,6 +177,12 @@ const staleAfter = 30 * time.Second
 // survive TUI restarts.
 func (m *Model) SetHolder(client *holder.Client) {
 	m.holder = client
+}
+
+// SetCursorSink wires the hardware cursor publisher; must be called before
+// the program runs.
+func (m *Model) SetCursorSink(sink *CursorSink) {
+	m.cursorSink = sink
 }
 
 // HolderExitMsg reports that a holder session's process exited; send it
@@ -1958,7 +1965,52 @@ func (m Model) View() string {
 		body = strings.Join(rows, "\n")
 	}
 	footer := m.renderFooter()
+	m.publishCursor()
 	return header + "\n" + body + "\n" + footer
+}
+
+// publishCursor reports where the hardware cursor belongs for the current
+// frame: the focused pane's cursor cell in terminal mode, or the footer
+// input point while typing there. Terminals render IME and dead-key
+// composition previews at the hardware cursor, so parking it at the real
+// input point makes those previews appear in the right place.
+func (m Model) publishCursor() {
+	if m.cursorSink == nil {
+		return
+	}
+	switch m.mode {
+	case modeTerminal:
+		current := m.currentPane()
+		currentSpace := m.currentSpace()
+		if current == nil || current.term == nil || currentSpace == nil {
+			break
+		}
+		x, y, visible := current.term.CursorCell()
+		if !visible {
+			break
+		}
+		for _, pr := range m.layoutFor(currentSpace.tab()) {
+			if pr.pane != current {
+				continue
+			}
+			inner := pr.r.inner()
+			if x >= inner.w || y >= inner.h {
+				break
+			}
+			// Screen: sidebar plus border to the left, header and tab bar above.
+			m.cursorSink.Set(sidebarWidth+1+inner.x+x, 2+inner.y+y, true)
+			return
+		}
+	case modeNewSpace, modeRename:
+		badge := " NEW WORKSPACE "
+		if m.mode == modeRename {
+			badge = " RENAME "
+		}
+		// Footer layout: badge, one space, then the input's value.
+		m.cursorSink.Set(len(badge)+1+m.input.Position(), m.height-1, true)
+		return
+	}
+	m.cursorSink.Set(0, 0, false)
 }
 
 // tabCell describes one clickable region of the tab bar in local x cells.
@@ -2346,11 +2398,26 @@ func (m Model) renderFooter() string {
 		}
 		body += style.Render("  " + m.status)
 	}
-	gap := m.width - lipgloss.Width(badge) - lipgloss.Width(body) - lipgloss.Width(right)
-	if gap < 0 {
-		gap = 0
+
+	// The footer must occupy exactly one terminal row. Prefer the active
+	// prompt or status over the summary on narrow windows, then clip any
+	// remaining overflow so Bubble Tea never wraps the start of the footer.
+	if m.width <= 0 {
+		return ""
 	}
-	return badge + body + styleBar.Render(strings.Repeat(" ", gap)) + right
+	badgeWidth := lipgloss.Width(badge)
+	if badgeWidth >= m.width {
+		return ansiCut(badge, 0, m.width) + "\x1b[0m"
+	}
+	if badgeWidth+lipgloss.Width(body)+lipgloss.Width(right) > m.width {
+		right = ""
+	}
+	available := m.width - badgeWidth - lipgloss.Width(right)
+	if lipgloss.Width(body) > available {
+		body = ansiCut(body, 0, available) + "\x1b[0m"
+	}
+	gap := m.width - badgeWidth - lipgloss.Width(body) - lipgloss.Width(right)
+	return badge + body + styleBar.Render(strings.Repeat(" ", max(0, gap))) + right
 }
 
 func (m Model) agentSummary() string {

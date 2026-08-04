@@ -180,21 +180,14 @@ func TestEncodePaste(t *testing.T) {
 	}
 }
 
-func TestSynchronizedOutputSuppressesPartialUpdates(t *testing.T) {
+func TestSynchronizedOutputStillNotifiesOuterRenderer(t *testing.T) {
 	pane := NewHolderPane(nil, 1, 40, 6)
+	pane.Feed([]byte("\x1b[?2026h~"))
 
-	pane.Feed([]byte("\x1b[?2026hpartial"))
-	select {
-	case <-pane.Updates():
-		t.Fatal("received update during synchronized output")
-	default:
-	}
-
-	pane.Feed([]byte(" frame\x1b[?2026l"))
 	select {
 	case <-pane.Updates():
 	case <-time.After(time.Second):
-		t.Fatal("no update after synchronized output ended")
+		t.Fatal("output update was suppressed while synchronized mode remained set")
 	}
 }
 

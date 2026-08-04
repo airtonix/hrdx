@@ -194,7 +194,12 @@ func main() {
 	// WithReportFocus: after system sleep the terminal's screen contents
 	// and the renderer's cache can disagree; the focus-regained event on
 	// wake triggers a full repaint (see FocusMsg in the update loop).
-	program := tea.NewProgram(modelUI, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithReportFocus())
+	// The cursor sink keeps the hardware cursor at the focused input point
+	// so IME and dead-key composition previews appear where the user types.
+	cursorSink := ui.NewCursorSink()
+	modelUI.SetCursorSink(cursorSink)
+	program := tea.NewProgram(modelUI, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithReportFocus(),
+		tea.WithOutput(ui.NewCursorOutput(os.Stdout, cursorSink)))
 
 	if apiOn && statePath != "" {
 		socket := filepath.Join(filepath.Dir(statePath), "hrdx.sock")

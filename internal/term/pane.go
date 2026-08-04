@@ -124,11 +124,8 @@ func (p *Pane) Feed(data []byte) {
 	p.mu.Lock()
 	p.scanKeyboardProtocol(data)
 	p.writeOutput(data)
-	synchronized := p.synchronizedOutput()
 	p.mu.Unlock()
-	if !synchronized {
-		p.notify()
-	}
+	p.notify()
 }
 
 // MarkExited flags the subprocess as gone and closes the updates channel.
@@ -191,11 +188,8 @@ func (p *Pane) reader() {
 			p.mu.Lock()
 			p.scanKeyboardProtocol(buffer[:n])
 			p.writeOutput(buffer[:n])
-			synchronized := p.synchronizedOutput()
 			p.mu.Unlock()
-			if !synchronized {
-				p.notify()
-			}
+			p.notify()
 		}
 		if err != nil {
 			break
@@ -224,16 +218,6 @@ func (p *Pane) writeOutput(data []byte) {
 	limit := p.vt.HistoryLen()
 	p.vt.Unlock()
 	p.scrollOffset = min(limit, p.scrollOffset+int(after-before))
-}
-
-// synchronizedOutput reports whether the child is inside a DEC mode 2026
-// atomic output frame. Suppressing intermediate notifications prevents the
-// outer renderer from displaying a partially written child frame.
-// p.mu must be held by the caller.
-func (p *Pane) synchronizedOutput() bool {
-	p.vt.Lock()
-	defer p.vt.Unlock()
-	return p.vt.Mode()&vt.ModeSynchronizedOutput != 0
 }
 
 // scanKeyboardProtocol watches the output stream for kitty keyboard
@@ -462,6 +446,18 @@ func (p *Pane) Title() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.vt.Title()
+}
+
+// CursorCell reports the child's cursor cell and whether it is visible in
+// live view. Used to park the host terminal's hardware cursor there so IME
+// and dead-key composition previews appear at the focused input point.
+func (p *Pane) CursorCell() (x, y int, visible bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.vt.Lock()
+	defer p.vt.Unlock()
+	cursor := p.vt.Cursor()
+	return cursor.X, cursor.Y, p.vt.CursorVisible() && !p.exited && p.scrollOffset == 0
 }
 
 // AppCursor reports whether the subprocess enabled application cursor keys.

@@ -160,6 +160,30 @@ func TestFooterShowsAgentSummaryOnRight(t *testing.T) {
 	}
 }
 
+func TestFooterInputDoesNotWrapOnNarrowWindow(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	model.width = 45
+	model.mode = modeNewSpace
+	model.input.Focus()
+	model.input.SetValue("~")
+	model.completions = []string{
+		"/Users/pat/Developer/alpha",
+		"/Users/pat/Developer/beta",
+		"/Users/pat/Developer/gamma",
+	}
+
+	footer := model.renderFooter()
+	if width := lipgloss.Width(footer); width != model.width {
+		t.Fatalf("footer width = %d, want %d: %q", width, model.width, footer)
+	}
+	if !strings.Contains(footer, "NEW WORKSPACE") || !strings.Contains(footer, "~") {
+		t.Fatalf("footer lost prompt or input: %q", footer)
+	}
+	if strings.Contains(footer, "agent") {
+		t.Fatalf("footer should hide summary before wrapping: %q", footer)
+	}
+}
+
 func TestSidebarScrollClamps(t *testing.T) {
 	model := newTestModel("/tmp/api")
 	model.height = 6 // tiny: 4 sidebar rows, two pinned for settings + blank
