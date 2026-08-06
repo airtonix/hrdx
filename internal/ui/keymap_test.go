@@ -30,6 +30,28 @@ func TestBuildPrefixKeysOverride(t *testing.T) {
 	}
 }
 
+func TestBuildPrefixKeysExcludesPrefixTrigger(t *testing.T) {
+	keys := buildPrefixKeys(nil)
+	if keys["ctrl+b"] != "literal" {
+		t.Fatalf(`keys["ctrl+b"] = %q, want "literal" ("prefix" must not collide with it)`, keys["ctrl+b"])
+	}
+	keys = buildPrefixKeys(map[string]string{"prefix": "ctrl+a"})
+	if _, ok := keys["ctrl+a"]; ok {
+		t.Fatal(`overriding "prefix" must not add an in-prefix-mode dispatch entry`)
+	}
+}
+
+func TestPrimaryKeyPrefixOverride(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	if got := model.primaryKey("prefix"); got != "ctrl+b" {
+		t.Fatalf("default prefix trigger = %q, want ctrl+b", got)
+	}
+	model.keyOverrides = map[string]string{"prefix": "ctrl+a"}
+	if got := model.primaryKey("prefix"); got != "ctrl+a" {
+		t.Fatalf("overridden prefix trigger = %q, want ctrl+a", got)
+	}
+}
+
 func TestIsSpuriousModifierKey(t *testing.T) {
 	cases := []struct {
 		name string

@@ -15,6 +15,7 @@ const keymapFile = "keys.json"
 // defaultPrefixKeys maps every prefix action to its default keys. The
 // first key of each action is the one shown in hints and docs.
 var defaultPrefixKeys = map[string][]string{
+	"prefix":       {"ctrl+b"},
 	"literal":      {"ctrl+b"},
 	"quit":         {"q"},
 	"picker-right": {"c"},
@@ -46,7 +47,10 @@ var defaultPrefixKeys = map[string][]string{
 
 // buildPrefixKeys resolves the key -> action table from the defaults and
 // the user's overrides. An override replaces all default keys of its
-// action and shadows whichever action held the key before.
+// action and shadows whichever action held the key before. "prefix" is
+// excluded: it is the trigger that enters prefix mode in the first place
+// (resolved separately via primaryKey), not an action dispatched once
+// already inside it, and by default shares its key with "literal".
 func buildPrefixKeys(overrides map[string]string) map[string]string {
 	keys := map[string]string{}
 	overridden := map[string]bool{}
@@ -54,7 +58,7 @@ func buildPrefixKeys(overrides map[string]string) map[string]string {
 		overridden[action] = true
 	}
 	for action, actionKeys := range defaultPrefixKeys {
-		if overridden[action] {
+		if action == "prefix" || overridden[action] {
 			continue
 		}
 		for _, key := range actionKeys {
@@ -62,6 +66,9 @@ func buildPrefixKeys(overrides map[string]string) map[string]string {
 		}
 	}
 	for action, key := range overrides {
+		if action == "prefix" {
+			continue
+		}
 		keys[key] = action
 	}
 	return keys
