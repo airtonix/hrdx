@@ -71,18 +71,19 @@ All keys go to the focused terminal, except the `ctrl+b` prefix (tmux style):
 
 | After `ctrl+b` | Action |
 |---|---|
-| `c` / `C` | Split right / below (opens a picker: installed agents or shell) |
-| `a` | Cycle the default agent through the installed ones |
-| `s` / `S` | Split with a new shell pane directly (right / below), also `%`/`\"` and `\|`/`-` |
+| `c` or `C` | Split right / below (opens a picker: installed agents or shell) |
+| `a` or `A` | Split right / below with the default agent directly |
+| `s` or `S` | Split with a new shell pane directly (right / below), also `%`/`\"` and `\|`/`-` |
 | `w` | New workspace (directory prompt with tab completion, then agent/shell picker) |
 | `t` | New tab in the current workspace (opens the agent/shell picker) |
-| `n` / `p` | Next / previous tab |
-| `]` / `[` | Next / previous workspace |
-| `tab` / `shift+tab` | Next / previous pane; stays in prefix mode for repeated jumps, `esc` exits |
+| `n` or `p` | Next / previous tab |
+| `]` or `[` | Next / previous workspace |
+| `tab` or `shift+tab` | Next / previous pane; stays in prefix mode for repeated jumps, `esc` exits |
+| `/` | Fuzzy finder over every workspace, tab, and pane: type to filter, arrows select, enter jumps |
 | `r` | Rename the focused pane |
 | `m` | Open the pane context menu |
 | `=` | Equalize all splits |
-| `u` / `d` (or `pgup`/`pgdown`) | Scroll the focused pane's history |
+| `u` or `d` (or `pgup`/`pgdown`) | Scroll the focused pane's history |
 | `esc` / `G` | Back to live output, clear selection |
 | `,` | Settings window: enable / disable agents, notifications |
 | `x` | Close pane (sibling takes its room) |
@@ -90,6 +91,22 @@ All keys go to the focused terminal, except the `ctrl+b` prefix (tmux style):
 | `ctrl+b` | Send a literal ctrl+b to the pane |
 | `q` | Quit |
 | `left` / `right` | Scroll the hint row in the footer (narrow terminals) |
+
+Panes whose process exits (for example `exit` in a shell) close automatically; the sibling pane takes the room. Panes that fail to start stay visible with the error.
+
+### Custom keys
+
+Prefix keys are remappable via a `keys.json` next to the state file (`~/Library/Application Support/hrdx/keys.json` on macOS, `$XDG_CONFIG_HOME/hrdx/keys.json` on Linux). It maps action names to a single key; an override replaces that action's default keys:
+
+```json
+{
+  "find": "f",
+  "quit": "Q",
+  "agent-cycle": "g"
+}
+```
+
+Actions: `literal`, `quit`, `picker-right`, `picker-down`, `agent-right`, `agent-down`, `agent-cycle` (unbound by default), `shell-right`, `shell-down`, `workspace`, `tab-new`, `tab-next`, `tab-prev`, `space-next`, `space-prev`, `pane-next`, `pane-prev`, `find`, `close-pane`, `close-space`, `equalize`, `rename`, `menu`, `settings`, `scroll-up`, `scroll-down`, `live`.
 
 ## Mouse
 

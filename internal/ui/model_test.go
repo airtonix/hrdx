@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/patriceckhart/hrdx/internal/state"
+	"github.com/patriceckhart/hrdx/internal/term"
 )
 
 func newTestModel(paths ...string) Model {
@@ -459,6 +460,24 @@ func TestPaneMenuHidesCloseForOnlyPaneInTab(t *testing.T) {
 	model.addPane(currentSpace, "shell", true)
 	if items := model.menuItems(); items[len(items)-1].action != "close" {
 		t.Fatal("close pane should be available when another pane is open in the same tab")
+	}
+}
+
+func TestExitedPaneAutoCloses(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	currentSpace := model.spaces[0]
+	second := model.addPane(currentSpace, "shell", true)
+	if len(currentSpace.tab().panes) != 2 {
+		t.Fatal("setup: expected two panes")
+	}
+	exited := term.NewHolderPane(nil, 0, 80, 24)
+	exited.MarkExited() // Close is a no-op on an exited pane
+	second.term = exited
+
+	updated, _ := model.Update(paneUpdateMsg{id: second.id, open: false})
+	got := updated.(Model)
+	if n := len(got.spaces[0].tab().panes); n != 1 {
+		t.Fatalf("panes after exit = %d, want 1 (auto close)", n)
 	}
 }
 

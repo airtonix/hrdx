@@ -38,6 +38,7 @@ const (
 	modeRename
 	modeMenu
 	modeSettings
+	modeFind
 )
 
 // menuItem is one entry of the right-click context menu.
@@ -157,14 +158,18 @@ type Model struct {
 	completions   []string
 	completion    int
 	sideScroll    int
-	dragSpace     *space           // sidebar workspace being dragged for reordering
-	dragMoved     bool             // the drag moved rows: suppress persist-less release
-	hintScroll    int              // first visible hint in the ctrl+b footer row
-	updateInfo    update.Info      // populated async; Available drives the notice
-	events        *api.Broadcaster // API event fan-out, nil-safe
-	holder        *holder.Client   // session holder connection, nil = local panes
-	blurredAt     time.Time        // when the terminal lost focus, for stale detection
-	cursorSink    *CursorSink      // publishes the hardware cursor position, nil-safe
+	dragSpace     *space            // sidebar workspace being dragged for reordering
+	dragMoved     bool              // the drag moved rows: suppress persist-less release
+	hintScroll    int               // first visible hint in the ctrl+b footer row
+	updateInfo    update.Info       // populated async; Available drives the notice
+	events        *api.Broadcaster  // API event fan-out, nil-safe
+	holder        *holder.Client    // session holder connection, nil = local panes
+	blurredAt     time.Time         // when the terminal lost focus, for stale detection
+	cursorSink    *CursorSink       // publishes the hardware cursor position, nil-safe
+	prefixKeys    map[string]string // prefix key -> action, defaults plus keys.json
+	keyOverrides  map[string]string // action -> key from keys.json, for hints
+	findIndex     int               // selected row of the find window
+	quitting      bool              // shutting down: exits must not edit the layout
 }
 
 // staleAfter is how long the terminal must have been unfocused before a
@@ -371,8 +376,17 @@ func New(config Config, paths []string, statePath string, saved state.State) Mod
 	// Custom harnesses live next to the state file and must register
 	// before any kind validation below.
 	harnessProblem := ""
+	keymapOverrides := map[string]string{}
 	if statePath != "" {
 		harnessProblem = loadHarnesses(filepath.Dir(statePath))
+		overrides, keymapProblem := loadKeymap(filepath.Dir(statePath))
+		keymapOverrides = overrides
+		if keymapProblem != "" {
+			if harnessProblem != "" {
+				harnessProblem += "; "
+			}
+			harnessProblem += keymapProblem
+		}
 	}
 	if !isAgentKind(config.DefaultAgent) {
 		config.DefaultAgent = "zot"
@@ -384,7 +398,8 @@ func New(config Config, paths []string, statePath string, saved state.State) Mod
 	model := Model{config: config, input: input, nextID: 1, statePath: statePath,
 		branches: map[string]branchInfo{}, disabled: map[string]bool{},
 		wasBusy: map[int]bool{}, soundOn: saved.Sound, status: harnessProblem,
-		soundKind: saved.SoundKind, notifyOn: saved.Notify, themeName: saved.Theme}
+		soundKind: saved.SoundKind, notifyOn: saved.Notify, themeName: saved.Theme,
+		prefixKeys: buildPrefixKeys(keymapOverrides), keyOverrides: keymapOverrides}
 	if statePath != "" {
 		for _, problem := range []string{
 			loadSounds(filepath.Dir(statePath)),
@@ -701,12 +716,19 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForUpdate(msg.id, msg.term.Updates())
 
 	case paneUpdateMsg:
-		target, _ := m.paneByID(msg.id)
+		target, owner := m.paneByID(msg.id)
 		if target == nil || target.term == nil {
 			return m, nil
 		}
 		if !msg.open {
 			target.running = false
+			// The process is gone; the pane follows, like a closing terminal
+			// window. Startup failures keep their pane via target.failure so
+			// the error stays readable.
+			if m.quitting {
+				return m, nil
+			}
+			m.removePane(owner, target)
 			return m, nil
 		}
 		var tick tea.Cmd
@@ -949,14 +971,19 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
 
+	case modeFind:
+		return m.updateFindKey(msg)
+
 	case modePrefix:
 		// Pane cycling and hint scrolling stay in prefix mode so they can be
 		// repeated. Escape returns input to the focused terminal.
-		switch msg.String() {
-		case "tab", "shift+tab":
+		switch action := m.prefixKeys[msg.String()]; action {
+		case "pane-next", "pane-prev":
 			return m.runPrefix(msg)
+		}
+		switch msg.String() {
 		case "right":
-			m.hintScroll = min(m.hintScroll+1, len(prefixHintList)-1)
+			m.hintScroll = min(m.hintScroll+1, len(m.prefixHintEntries())-1)
 			return m, nil
 		case "left":
 			m.hintScroll = max(0, m.hintScroll-1)
@@ -990,62 +1017,68 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) runPrefix(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "ctrl+b":
+	switch m.prefixKeys[msg.String()] {
+	case "literal":
 		if current := m.currentPane(); current != nil && current.term != nil {
 			current.term.Write([]byte{0x02})
 		}
-	case "q":
+	case "quit":
 		m.closeAll()
 		return m, tea.Quit
-	case "c":
+	case "picker-right":
 		m.openKindPicker("split-right", nil, "", rect{x: sidebarWidth + 2, y: 1})
-	case "C":
+	case "picker-down":
 		m.openKindPicker("split-down", nil, "", rect{x: sidebarWidth + 2, y: 1})
-	case "a":
+	case "agent-right":
+		return m.splitCurrent(m.config.DefaultAgent, true)
+	case "agent-down":
+		return m.splitCurrent(m.config.DefaultAgent, false)
+	case "agent-cycle":
 		m.cycleAgent()
 		return m, m.flashInfo("default agent: " + m.config.DefaultAgent)
-	case "s", "%", "|":
+	case "shell-right":
 		return m.splitCurrent("shell", true)
-	case "S", "\"", "-":
+	case "shell-down":
 		return m.splitCurrent("shell", false)
-	case "w":
+	case "workspace":
 		return m.openNewSpaceInput()
-	case "t":
+	case "tab-new":
 		if currentSpace := m.currentSpace(); currentSpace != nil {
 			m.openKindPicker("tab", currentSpace, "", rect{x: sidebarWidth + 2, y: 1})
 		}
-	case "n":
+	case "tab-next":
 		m.selectTab(1)
-	case "p":
+	case "tab-prev":
 		m.selectTab(-1)
-	case "]":
+	case "space-next":
 		m.selectSpace(1)
-	case "[":
+	case "space-prev":
 		m.selectSpace(-1)
-	case "tab":
+	case "pane-next":
 		m.cyclePane(1)
-	case "shift+tab":
+	case "pane-prev":
 		m.cyclePane(-1)
-	case "x":
+	case "find":
+		return m.openFind()
+	case "close-pane":
 		m.closeCurrentPane()
-	case "X":
+	case "close-space":
 		m.closeCurrentSpace()
-	case "=":
+	case "equalize":
 		m.equalizeCurrent()
-	case "r":
+	case "rename":
 		return m.openRenameInput(m.currentPane())
-	case "m":
+	case "menu":
 		if current := m.currentPane(); current != nil {
 			m.openMenu(current, rect{x: 2, y: 1})
 		}
-	case ",":
+	case "settings":
 		m.openSettings()
-	case "u", "pgup":
+	case "scroll-up":
 		m.scrollCurrent(m.pageStep())
-	case "d", "pgdown":
+	case "scroll-down":
 		m.scrollCurrent(-m.pageStep())
-	case "esc", "G":
+	case "live":
 		if current := m.currentPane(); current != nil && current.term != nil {
 			current.term.ResetScroll()
 			current.term.ClearSelection()
@@ -1964,6 +1997,11 @@ func (m Model) View() string {
 		m.overlaySettings(rows)
 		body = strings.Join(rows, "\n")
 	}
+	if m.mode == modeFind {
+		rows := strings.Split(body, "\n")
+		m.overlayFind(rows)
+		body = strings.Join(rows, "\n")
+	}
 	footer := m.renderFooter()
 	m.publishCursor()
 	return header + "\n" + body + "\n" + footer
@@ -2008,6 +2046,11 @@ func (m Model) publishCursor() {
 		}
 		// Footer layout: badge, one space, then the input's value.
 		m.cursorSink.Set(len(badge)+1+m.input.Position(), m.height-1, true)
+		return
+	case modeFind:
+		box := m.findBox()
+		// Query row: border, " > ", then the input; body starts at row 1.
+		m.cursorSink.Set(box.x+4+m.input.Position(), 1+box.y+1, true)
 		return
 	}
 	m.cursorSink.Set(0, 0, false)
@@ -2373,6 +2416,9 @@ func (m Model) renderFooter() string {
 	case modeSettings:
 		badge = styleBadgeInput.Render(" SETTINGS ")
 		body = styleBarMuted.Render(" enter toggles, tab switches section, esc closes")
+	case modeFind:
+		badge = styleBadgeInput.Render(" FIND ")
+		body = styleBarMuted.Render(" type to filter, arrows select, enter jumps, esc closes")
 	case modePrefix:
 		badge = styleBadgePrefix.Render(" CTRL+B ")
 		body = m.prefixHints(m.width - lipgloss.Width(badge) - lipgloss.Width(right))
@@ -2442,38 +2488,74 @@ func (m Model) agentSummary() string {
 	return fmt.Sprintf("%d %s | %d busy", agents, label, busy)
 }
 
-var prefixHintList = [][2]string{
-	{"c/C", "split"},
-	{"a", "agent"},
-	{"s/S", "shell"},
-	{"w", "workspace"},
-	{"t", "tab"},
-	{"n/p", "tabs"},
-	{"[/]", "switch"},
-	{"r", "rename"},
-	{"=", "equal"},
-	{"u/d", "scroll"},
-	{"x/X", "close"},
-	{",", "settings"},
-	{"q", "quit"},
+// primaryKey returns the key shown in hints for an action: the user's
+// override, or the first default key.
+func (m Model) primaryKey(action string) string {
+	if key, ok := m.keyOverrides[action]; ok {
+		return key
+	}
+	if defaults := defaultPrefixKeys[action]; len(defaults) > 0 {
+		return defaults[0]
+	}
+	return ""
+}
+
+// prefixHintEntries builds the ctrl+b hint row from the active keymap.
+// Keys of one entry are space separated; a slash would read as its own
+// shortcut (see issue #2).
+func (m Model) prefixHintEntries() [][2]string {
+	keys := func(actions ...string) string {
+		var parts []string
+		for _, action := range actions {
+			if key := m.primaryKey(action); key != "" {
+				parts = append(parts, key)
+			}
+		}
+		return strings.Join(parts, " ")
+	}
+	entries := [][2]string{
+		{keys("picker-right", "picker-down"), "split"},
+		{keys("agent-right", "agent-down"), "agent"},
+		{keys("shell-right", "shell-down"), "shell"},
+		{keys("workspace"), "workspace"},
+		{keys("tab-new"), "tab"},
+		{keys("tab-next", "tab-prev"), "tabs"},
+		{keys("space-next", "space-prev"), "workspaces"},
+		{keys("pane-next"), "panes"},
+		{keys("find"), "find"},
+		{keys("rename"), "rename"},
+		{keys("equalize"), "equal"},
+		{keys("scroll-up", "scroll-down"), "scroll"},
+		{keys("close-pane", "close-space"), "close"},
+		{keys("settings"), "settings"},
+		{keys("quit"), "quit"},
+	}
+	out := entries[:0]
+	for _, entry := range entries {
+		if entry[0] != "" {
+			out = append(out, entry)
+		}
+	}
+	return out
 }
 
 // prefixHints renders the ctrl+b key hints, fitting as many as the given
 // width allows, starting at the hint scroll offset. Ellipses on either
 // side mark clipped hints; left/right arrows move the window.
 func (m Model) prefixHints(width int) string {
-	start := clampInt(m.hintScroll, 0, len(prefixHintList)-1)
+	hints := m.prefixHintEntries()
+	start := clampInt(m.hintScroll, 0, len(hints)-1)
 	var out strings.Builder
 	used := 0
 	if start > 0 {
 		out.WriteString(styleBarMuted.Render(" ‹"))
 		used += 2
 	}
-	for index := start; index < len(prefixHintList); index++ {
-		hint := prefixHintList[index]
+	for index := start; index < len(hints); index++ {
+		hint := hints[index]
 		cellWidth := 1 + len(hint[0]) + 1 + len(hint[1]) + 1
 		reserve := 0
-		if index < len(prefixHintList)-1 {
+		if index < len(hints)-1 {
 			reserve = 2 // room for the arrow marker when more hints follow
 		}
 		if used+cellWidth+reserve > width {
@@ -2553,21 +2635,42 @@ func (m *Model) closeCurrentPane() {
 	if len(currentTab.panes) == 0 {
 		return
 	}
-	current := currentTab.panes[currentTab.selected]
-	if current.term != nil {
-		current.term.Close()
+	m.removePane(currentSpace, currentTab.panes[currentTab.selected])
+}
+
+// removePane closes a pane's process and removes it from its tab's layout,
+// wherever it lives. The last pane of a tab takes the tab with it, unless
+// it is the workspace's only tab.
+func (m *Model) removePane(owner *space, target *pane) {
+	if owner == nil || target == nil {
+		return
 	}
-	removeAt(&currentTab.layout, current)
-	currentTab.panes = append(currentTab.panes[:currentTab.selected], currentTab.panes[currentTab.selected+1:]...)
-	if currentTab.selected >= len(currentTab.panes) {
-		currentTab.selected = max(0, len(currentTab.panes)-1)
+	for _, currentTab := range owner.tabs {
+		index := -1
+		for i, current := range currentTab.panes {
+			if current == target {
+				index = i
+			}
+		}
+		if index < 0 {
+			continue
+		}
+		if target.term != nil {
+			target.term.Close()
+		}
+		removeAt(&currentTab.layout, target)
+		currentTab.panes = append(currentTab.panes[:index], currentTab.panes[index+1:]...)
+		if currentTab.selected >= len(currentTab.panes) {
+			currentTab.selected = max(0, len(currentTab.panes)-1)
+		}
+		// Dropping the last pane closes the tab too, unless it is the only one.
+		if len(currentTab.panes) == 0 && len(owner.tabs) > 1 {
+			m.closeTab(owner, currentTab)
+		}
+		m.resizePanes(owner)
+		m.persist()
+		return
 	}
-	// Dropping the last pane closes the tab too, unless it is the only one.
-	if len(currentTab.panes) == 0 && len(currentSpace.tabs) > 1 {
-		m.closeTab(currentSpace, currentTab)
-	}
-	m.resizePanes(currentSpace)
-	m.persist()
 }
 
 func (m *Model) closeTab(owner *space, target *tab) {
@@ -2604,6 +2707,7 @@ func (m *Model) closeCurrentSpace() {
 }
 
 func (m *Model) closeAll() {
+	m.quitting = true
 	m.persist()
 	if m.kittyPushed {
 		// Pop while the alt screen is still active, before Bubble Tea
