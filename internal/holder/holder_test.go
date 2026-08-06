@@ -257,3 +257,44 @@ func TestHolderKill(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// The exit handler may block on the UI loop, which itself may be waiting
+// for a holder response. The read loop must keep delivering responses
+// while a handler is stuck, or the whole TUI deadlocks (close pane bug).
+func TestExitHandlerDoesNotBlockResponses(t *testing.T) {
+	socket := startTestHolder(t)
+	client, err := Connect(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	release := make(chan struct{})
+	client.SetExitHandler(func(session int64) { <-release })
+	defer close(release)
+
+	session, err := client.Start("/bin/sh", []string{"-c", "sleep 30"}, t.TempDir(), []string{"PATH=/bin:/usr/bin"}, 80, 24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out collector
+	if _, err := client.Attach(session, 80, 24, out.sink); err != nil {
+		t.Fatal(err)
+	}
+	client.Kill(session)
+	time.Sleep(300 * time.Millisecond) // exit event arrives, handler blocks
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.List()
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("List during blocked exit handler: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("holder call deadlocked while the exit handler was blocked")
+	}
+}
