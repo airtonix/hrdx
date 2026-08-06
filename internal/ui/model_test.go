@@ -387,9 +387,10 @@ func TestResolveDirRejectsMissing(t *testing.T) {
 	if _, err := resolveDir("/definitely/not/here-12345"); err == nil {
 		t.Fatal("resolveDir accepted a missing directory")
 	}
-	path, err := resolveDir("/tmp")
+	dir := t.TempDir()
+	path, err := resolveDir(dir)
 	if err != nil || path == "" {
-		t.Fatalf("resolveDir(/tmp) = %q/%v", path, err)
+		t.Fatalf("resolveDir(%s) = %q/%v", dir, path, err)
 	}
 }
 
