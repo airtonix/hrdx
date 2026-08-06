@@ -1008,12 +1008,25 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				// when their one-time DECSET 2004 sequence was missed on reattach.
 				bracketed := current.term.BracketedPaste() || m.paneAgentKind(current) != ""
 				current.term.Write(term.EncodePaste(string(msg.Runes), bracketed))
-			} else {
+			} else if !isSpuriousModifierKey(msg) {
 				current.term.Write(term.EncodeKey(msg, current.term.AppCursor()))
 			}
 		}
 		return m, nil
 	}
+}
+
+// isSpuriousModifierKey reports a bare NUL keystroke with no other
+// content. On Windows, Bubble Tea's console-input reader does not
+// filter a lone Ctrl or Alt key-down the way it does Shift, so pressing
+// either by itself (a fraction of a second before the paired letter's
+// own event) surfaces as a phantom KeyRunes event carrying rune 0. No
+// real keyboard input produces a literal NUL, so it is always safe to
+// drop; forwarding it would otherwise type ^@ into the pane. Unix's
+// genuine ctrl+@ arrives as a distinct KeyCtrlAt message and is
+// unaffected.
+func isSpuriousModifierKey(msg tea.KeyMsg) bool {
+	return msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 0
 }
 
 func (m Model) runPrefix(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -2168,7 +2181,11 @@ func (m Model) renderSidebar() string {
 	if offset < len(source)-list {
 		rows[list-1] = " " + stylePaneDim.Render("↓ more")
 	}
-	rows = append(rows, " "+stylePaneDim.Render("⚙ settings"), "")
+	// Extra trailing space after the gear: unlike the other sidebar icons
+	// (●○↑↓), U+2699 is uncommon enough that some fonts (Windows
+	// Terminal's default among them) substitute a wider fallback glyph
+	// for it, which then overlaps a single following space.
+	rows = append(rows, " "+stylePaneDim.Render("⚙  settings"), "")
 
 	return lipgloss.NewStyle().
 		Width(sidebarWidth).

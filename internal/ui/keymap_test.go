@@ -30,6 +30,25 @@ func TestBuildPrefixKeysOverride(t *testing.T) {
 	}
 }
 
+func TestIsSpuriousModifierKey(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  tea.KeyMsg
+		want bool
+	}{
+		{"bare nul", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{0}}, true},
+		{"bare nul with alt", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{0}, Alt: true}, true},
+		{"real rune", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}}, false},
+		{"multi rune paste-like", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{0, 'a'}}, false},
+		{"named ctrl key", tea.KeyMsg{Type: tea.KeyCtrlAt}, false},
+	}
+	for _, c := range cases {
+		if got := isSpuriousModifierKey(c.msg); got != c.want {
+			t.Errorf("%s: isSpuriousModifierKey = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestLoadKeymap(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, keymapFile),
