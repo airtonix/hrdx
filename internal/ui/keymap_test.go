@@ -30,6 +30,64 @@ func TestBuildPrefixKeysOverride(t *testing.T) {
 	}
 }
 
+func TestBuildPrefixKeysExcludesPrefixTrigger(t *testing.T) {
+	keys := buildPrefixKeys(nil)
+	if keys["ctrl+b"] != "literal" {
+		t.Fatalf(`keys["ctrl+b"] = %q, want "literal" ("prefix" must not collide with it)`, keys["ctrl+b"])
+	}
+	keys = buildPrefixKeys(map[string]string{"prefix": "ctrl+a"})
+	if _, ok := keys["ctrl+a"]; ok {
+		t.Fatal(`overriding "prefix" must not add an in-prefix-mode dispatch entry`)
+	}
+}
+
+func TestPrimaryKeyPrefixOverride(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	if got := model.primaryKey("prefix"); got != "ctrl+b" {
+		t.Fatalf("default prefix trigger = %q, want ctrl+b", got)
+	}
+	model.keyOverrides = map[string]string{"prefix": "ctrl+a"}
+	if got := model.primaryKey("prefix"); got != "ctrl+a" {
+		t.Fatalf("overridden prefix trigger = %q, want ctrl+a", got)
+	}
+}
+
+func TestRawCSIUUsesRemappedPrefix(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	model.prefixTrigger = "ctrl+a"
+
+	updated, _ := model.updateRaw([]byte("\x1b[98;5u"))
+	model = updated.(Model)
+	if model.mode != modeTerminal {
+		t.Fatal("old ctrl+b CSI-u sequence still entered prefix mode")
+	}
+
+	updated, _ = model.updateRaw([]byte("\x1b[97;5u"))
+	model = updated.(Model)
+	if model.mode != modePrefix {
+		t.Fatal("remapped ctrl+a CSI-u sequence did not enter prefix mode")
+	}
+}
+
+func TestIsSpuriousModifierKey(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  tea.KeyMsg
+		want bool
+	}{
+		{"bare nul", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{0}}, true},
+		{"bare nul with alt", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{0}, Alt: true}, true},
+		{"real rune", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}}, false},
+		{"multi rune paste-like", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{0, 'a'}}, false},
+		{"named ctrl key", tea.KeyMsg{Type: tea.KeyCtrlAt}, false},
+	}
+	for _, c := range cases {
+		if got := isSpuriousModifierKey(c.msg); got != c.want {
+			t.Errorf("%s: isSpuriousModifierKey = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestLoadKeymap(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, keymapFile),

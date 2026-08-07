@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -167,6 +168,7 @@ type Model struct {
 	blurredAt     time.Time         // when the terminal lost focus, for stale detection
 	cursorSink    *CursorSink       // publishes the hardware cursor position, nil-safe
 	prefixKeys    map[string]string // prefix key -> action, defaults plus keys.json
+	prefixTrigger string            // key that enters prefix mode from a live terminal
 	keyOverrides  map[string]string // action -> key from keys.json, for hints
 	findIndex     int               // selected row of the find window
 	quitting      bool              // shutting down: exits must not edit the layout
@@ -400,6 +402,7 @@ func New(config Config, paths []string, statePath string, saved state.State) Mod
 		wasBusy: map[int]bool{}, soundOn: saved.Sound, status: harnessProblem,
 		soundKind: saved.SoundKind, notifyOn: saved.Notify, themeName: saved.Theme,
 		prefixKeys: buildPrefixKeys(keymapOverrides), keyOverrides: keymapOverrides}
+	model.prefixTrigger = model.primaryKey("prefix")
 	if statePath != "" {
 		for _, problem := range []string{
 			loadSounds(filepath.Dir(statePath)),
@@ -563,7 +566,7 @@ func (m Model) startPane(owner *space, target *pane) tea.Cmd {
 		}
 	}
 	command := m.config.Shell
-	args := []string{"-l"}
+	args := shellArgsFor(runtime.GOOS)
 	if spec := agentByKind(target.kind); spec != nil {
 		command = m.config.binaryFor(target.kind)
 		args = append([]string{}, spec.args...)
@@ -594,6 +597,16 @@ func (m Model) startPane(owner *space, target *pane) tea.Cmd {
 		started, err := term.Start(command, args, cwd, cols, rows)
 		return paneStartedMsg{id: id, term: started, err: err}
 	}
+}
+
+// shellArgsFor returns the default arguments for an interactive shell.
+// Unix shells retain the existing login-shell behavior. Native Windows
+// shells such as cmd.exe and powershell.exe do not accept the Unix -l flag.
+func shellArgsFor(goos string) []string {
+	if goos == "windows" {
+		return nil
+	}
+	return []string{"-l"}
 }
 
 // startHolderPane starts (or reattaches to) a session in the holder and
@@ -831,9 +844,11 @@ func (m Model) updateRaw(raw []byte) (tea.Model, tea.Cmd) {
 		}
 	}
 	code, mods, ok := parseCSIU(raw)
-	if ok && code == 'b' && mods&modCtrl != 0 && m.mode == modeTerminal {
-		m.mode = modePrefix
-		return m, nil
+	if ok && m.mode == modeTerminal {
+		if legacy := legacyEncode(code, mods); len(legacy) > 0 && keyFromBytes(legacy, code, mods).String() == m.prefixTrigger {
+			m.mode = modePrefix
+			return m, nil
+		}
 	}
 	if ok && m.mode != modeTerminal {
 		// Translate the chord for the local input modes.
@@ -872,6 +887,9 @@ func keyFromBytes(legacy []byte, code rune, mods int) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyTab}
 	case 127:
 		return tea.KeyMsg{Type: tea.KeyBackspace}
+	}
+	if mods&modCtrl != 0 && code >= 'a' && code <= 'z' {
+		return tea.KeyMsg{Type: tea.KeyType(code - 'a' + 1), Alt: mods&modAlt != 0}
 	}
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(string(legacy)), Alt: mods&modAlt != 0}
 }
@@ -998,7 +1016,7 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.runPrefix(msg)
 
 	default: // modeTerminal
-		if msg.String() == "ctrl+b" {
+		if msg.String() == m.prefixTrigger {
 			m.mode = modePrefix
 			return m, nil
 		}
@@ -1008,12 +1026,25 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				// when their one-time DECSET 2004 sequence was missed on reattach.
 				bracketed := current.term.BracketedPaste() || m.paneAgentKind(current) != ""
 				current.term.Write(term.EncodePaste(string(msg.Runes), bracketed))
-			} else {
+			} else if !isSpuriousModifierKey(msg) {
 				current.term.Write(term.EncodeKey(msg, current.term.AppCursor()))
 			}
 		}
 		return m, nil
 	}
+}
+
+// isSpuriousModifierKey reports a bare NUL keystroke with no other
+// content. On Windows, Bubble Tea's console-input reader does not
+// filter a lone Ctrl or Alt key-down the way it does Shift, so pressing
+// either by itself (a fraction of a second before the paired letter's
+// own event) surfaces as a phantom KeyRunes event carrying rune 0. No
+// real keyboard input produces a literal NUL, so it is always safe to
+// drop; forwarding it would otherwise type ^@ into the pane. Unix's
+// genuine ctrl+@ arrives as a distinct KeyCtrlAt message and is
+// unaffected.
+func isSpuriousModifierKey(msg tea.KeyMsg) bool {
+	return msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 0
 }
 
 func (m Model) runPrefix(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -2168,7 +2199,11 @@ func (m Model) renderSidebar() string {
 	if offset < len(source)-list {
 		rows[list-1] = " " + stylePaneDim.Render("↓ more")
 	}
-	rows = append(rows, " "+stylePaneDim.Render("⚙ settings"), "")
+	// Extra trailing space after the gear: unlike the other sidebar icons
+	// (●○↑↓), U+2699 is uncommon enough that some fonts (Windows
+	// Terminal's default among them) substitute a wider fallback glyph
+	// for it, which then overlaps a single following space.
+	rows = append(rows, " "+stylePaneDim.Render("⚙  settings"), "")
 
 	return lipgloss.NewStyle().
 		Width(sidebarWidth).
@@ -2185,7 +2220,7 @@ func (m Model) renderTerminal() string {
 	currentSpace := m.currentSpace()
 	if currentSpace == nil || currentSpace.tab().layout == nil {
 		return lipgloss.NewStyle().Padding(1, 2).Width(area.w).Height(area.h).
-			Render(styleMuted.Render("no panes. ctrl+b w opens a new workspace."))
+			Render(styleMuted.Render("no panes. " + m.prefixTrigger + " " + m.primaryKey("workspace") + " opens a new workspace."))
 	}
 
 	panes, _ := m.layoutAll(currentSpace.tab())
@@ -2420,11 +2455,11 @@ func (m Model) renderFooter() string {
 		badge = styleBadgeInput.Render(" FIND ")
 		body = styleBarMuted.Render(" type to filter, arrows select, enter jumps, esc closes")
 	case modePrefix:
-		badge = styleBadgePrefix.Render(" CTRL+B ")
+		badge = styleBadgePrefix.Render(" " + strings.ToUpper(m.prefixTrigger) + " ")
 		body = m.prefixHints(m.width - lipgloss.Width(badge) - lipgloss.Width(right))
 	default:
 		badge = styleBadgeTerm.Render(" TERM ")
-		body = styleBarMuted.Render(" ctrl+b commands")
+		body = styleBarMuted.Render(" " + m.prefixTrigger + " commands")
 		if m.updateInfo.Available {
 			body += styleBarText.Render("  update "+m.updateInfo.Current+" -> "+m.updateInfo.Latest) +
 				styleBarMuted.Render("  run 'hrdx update'")
