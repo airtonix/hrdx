@@ -324,6 +324,16 @@ func TestParseCSIU(t *testing.T) {
 	}
 }
 
+func TestShellArgsForPlatform(t *testing.T) {
+	if args := shellArgsFor("windows"); len(args) != 0 {
+		t.Fatalf("Windows shell args = %q, want none", args)
+	}
+	args := shellArgsFor("linux")
+	if len(args) != 1 || args[0] != "-l" {
+		t.Fatalf("Unix shell args = %q, want [-l]", args)
+	}
+}
+
 func TestCyclePaneUsesLayoutOrder(t *testing.T) {
 	model := newTestModel("/tmp/api")
 	currentSpace := model.spaces[0]

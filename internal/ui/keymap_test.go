@@ -52,6 +52,23 @@ func TestPrimaryKeyPrefixOverride(t *testing.T) {
 	}
 }
 
+func TestRawCSIUUsesRemappedPrefix(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	model.prefixTrigger = "ctrl+a"
+
+	updated, _ := model.updateRaw([]byte("\x1b[98;5u"))
+	model = updated.(Model)
+	if model.mode != modeTerminal {
+		t.Fatal("old ctrl+b CSI-u sequence still entered prefix mode")
+	}
+
+	updated, _ = model.updateRaw([]byte("\x1b[97;5u"))
+	model = updated.(Model)
+	if model.mode != modePrefix {
+		t.Fatal("remapped ctrl+a CSI-u sequence did not enter prefix mode")
+	}
+}
+
 func TestIsSpuriousModifierKey(t *testing.T) {
 	cases := []struct {
 		name string

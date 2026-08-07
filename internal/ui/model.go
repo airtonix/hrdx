@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -565,7 +566,7 @@ func (m Model) startPane(owner *space, target *pane) tea.Cmd {
 		}
 	}
 	command := m.config.Shell
-	args := []string{"-l"}
+	args := shellArgsFor(runtime.GOOS)
 	if spec := agentByKind(target.kind); spec != nil {
 		command = m.config.binaryFor(target.kind)
 		args = append([]string{}, spec.args...)
@@ -596,6 +597,16 @@ func (m Model) startPane(owner *space, target *pane) tea.Cmd {
 		started, err := term.Start(command, args, cwd, cols, rows)
 		return paneStartedMsg{id: id, term: started, err: err}
 	}
+}
+
+// shellArgsFor returns the default arguments for an interactive shell.
+// Unix shells retain the existing login-shell behavior. Native Windows
+// shells such as cmd.exe and powershell.exe do not accept the Unix -l flag.
+func shellArgsFor(goos string) []string {
+	if goos == "windows" {
+		return nil
+	}
+	return []string{"-l"}
 }
 
 // startHolderPane starts (or reattaches to) a session in the holder and
@@ -833,9 +844,11 @@ func (m Model) updateRaw(raw []byte) (tea.Model, tea.Cmd) {
 		}
 	}
 	code, mods, ok := parseCSIU(raw)
-	if ok && code == 'b' && mods&modCtrl != 0 && m.mode == modeTerminal {
-		m.mode = modePrefix
-		return m, nil
+	if ok && m.mode == modeTerminal {
+		if legacy := legacyEncode(code, mods); len(legacy) > 0 && keyFromBytes(legacy, code, mods).String() == m.prefixTrigger {
+			m.mode = modePrefix
+			return m, nil
+		}
 	}
 	if ok && m.mode != modeTerminal {
 		// Translate the chord for the local input modes.
@@ -874,6 +887,9 @@ func keyFromBytes(legacy []byte, code rune, mods int) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyTab}
 	case 127:
 		return tea.KeyMsg{Type: tea.KeyBackspace}
+	}
+	if mods&modCtrl != 0 && code >= 'a' && code <= 'z' {
+		return tea.KeyMsg{Type: tea.KeyType(code - 'a' + 1), Alt: mods&modAlt != 0}
 	}
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(string(legacy)), Alt: mods&modAlt != 0}
 }
