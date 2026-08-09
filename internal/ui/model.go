@@ -1849,9 +1849,9 @@ func (m Model) paneBusy(currentPane *pane) bool {
 	return currentPane.term.HasSpinner()
 }
 
-// sidebarPaneIcon distinguishes shells from agents while using shape,
-// color, and animation to expose the pane state. Agent panes animate only
-// while they are actively working; an idle agent process stays a robot.
+// sidebarPaneIcon uses a shared dot shape for shells and agents while
+// color and animation expose pane state. Agents animate only while active;
+// an idle agent process stays a dot.
 func (m Model) sidebarPaneIcon(currentPane *pane) string {
 	return paneTypeStateIcon(
 		currentPane,
@@ -1870,9 +1870,6 @@ func paneIconCell(style lipgloss.Style, glyph string) string {
 
 func paneTypeStateIcon(currentPane *pane, agent, busy bool, frame int) string {
 	runningGlyph, stoppedGlyph := "●", "○"
-	if agent {
-		runningGlyph, stoppedGlyph = "◆", "◇"
-	}
 	switch {
 	case currentPane.failure != "":
 		return paneIconCell(styleDotOff, stoppedGlyph)
@@ -1901,7 +1898,11 @@ func sidebarPaneState(currentPane *pane) string {
 }
 
 func (m Model) sidebarRows() []sidebarRow {
-	rows := []sidebarRow{{}}
+	rows := []sidebarRow{
+		{},
+		{label: " " + styleSection.Render("WORKSPACES")},
+		{},
+	}
 	for spaceIndex, currentSpace := range m.spaces {
 		if spaceIndex > 0 {
 			rows = append(rows, sidebarRow{

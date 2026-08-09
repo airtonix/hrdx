@@ -36,6 +36,7 @@ var (
 	styleBadgeInput  lipgloss.Style
 
 	// Sidebar.
+	styleSection   lipgloss.Style
 	styleSpaceSel  lipgloss.Style
 	styleSpaceDim  lipgloss.Style
 	stylePaneSel   lipgloss.Style
@@ -65,6 +66,7 @@ func rebuildStyles() {
 	styleBadgePrefix = lipgloss.NewStyle().Background(colorAlt).Foreground(colorInk).Bold(true)
 	styleBadgeInput = lipgloss.NewStyle().Background(colorGood).Foreground(colorInk).Bold(true)
 
+	styleSection = lipgloss.NewStyle().Foreground(colorMuted).Bold(true)
 	styleSpaceSel = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	styleSpaceDim = lipgloss.NewStyle().Foreground(colorBarFg).Bold(true)
 	stylePaneSel = lipgloss.NewStyle().Foreground(colorAccent)
