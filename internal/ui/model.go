@@ -1851,7 +1851,7 @@ func (m Model) paneBusy(currentPane *pane) bool {
 
 // sidebarPaneIcon distinguishes shells from agents while using shape,
 // color, and animation to expose the pane state. Agent panes animate only
-// while they are actively working; an idle agent process stays a diamond.
+// while they are actively working; an idle agent process stays a robot.
 func (m Model) sidebarPaneIcon(currentPane *pane) string {
 	return paneTypeStateIcon(
 		currentPane,
@@ -1861,6 +1861,13 @@ func (m Model) sidebarPaneIcon(currentPane *pane) string {
 	)
 }
 
+func paneIconCell(style lipgloss.Style, glyph string) string {
+	if lipgloss.Width(glyph) < 2 {
+		glyph += " "
+	}
+	return style.Render(glyph)
+}
+
 func paneTypeStateIcon(currentPane *pane, agent, busy bool, frame int) string {
 	runningGlyph, stoppedGlyph := "●", "○"
 	if agent {
@@ -1868,15 +1875,15 @@ func paneTypeStateIcon(currentPane *pane, agent, busy bool, frame int) string {
 	}
 	switch {
 	case currentPane.failure != "":
-		return styleDotOff.Render(stoppedGlyph)
+		return paneIconCell(styleDotOff, stoppedGlyph)
 	case agent && busy:
-		return styleDotBusy.Render(spinnerFrames[frame%len(spinnerFrames)])
+		return paneIconCell(styleDotBusy, spinnerFrames[frame%len(spinnerFrames)])
 	case currentPane.running:
-		return styleDotOn.Render(runningGlyph)
+		return paneIconCell(styleDotOn, runningGlyph)
 	case currentPane.term == nil:
-		return stylePaneDim.Render(stoppedGlyph)
+		return paneIconCell(stylePaneDim, stoppedGlyph)
 	default:
-		return styleDotOff.Render(stoppedGlyph)
+		return paneIconCell(styleDotOff, stoppedGlyph)
 	}
 }
 
@@ -1894,15 +1901,19 @@ func sidebarPaneState(currentPane *pane) string {
 }
 
 func (m Model) sidebarRows() []sidebarRow {
-	rows := []sidebarRow{}
+	rows := []sidebarRow{{}}
 	for spaceIndex, currentSpace := range m.spaces {
-		style := styleSpaceDim
+		if spaceIndex > 0 {
+			rows = append(rows, sidebarRow{
+				label: "  " + styleDivider.Render(strings.Repeat("─", sidebarWidth-4)),
+				kind:  "divider", space: spaceIndex, tab: -1, pane: -1,
+			})
+		}
 		rail := " "
 		if spaceIndex == m.selected {
-			style = styleSpaceSel
 			rail = styleSpaceSel.Render("▍")
 		}
-		label := rail + style.Render(truncate(currentSpace.name, sidebarWidth-3))
+		label := rail + styleSpaceDim.Render(truncate(currentSpace.name, sidebarWidth-3))
 		rows = append(rows, sidebarRow{
 			label: label,
 			kind:  "space", space: spaceIndex, tab: -1, pane: -1,
@@ -1920,8 +1931,12 @@ func (m Model) sidebarRows() []sidebarRow {
 				suffix += lipgloss.NewStyle().Foreground(colorAlt).Render(text)
 				suffixWidth += lipgloss.Width(text)
 			}
+			branchStyle := stylePaneDim
+			if spaceIndex == m.selected {
+				branchStyle = styleSpaceSel
+			}
 			rows = append(rows, sidebarRow{
-				label: rail + stylePaneDim.Render(truncate(branch.value, sidebarWidth-3-suffixWidth)) + suffix,
+				label: rail + branchStyle.Render(truncate(branch.value, sidebarWidth-3-suffixWidth)) + suffix,
 				kind:  "space", space: spaceIndex, tab: -1, pane: -1,
 			})
 		}
@@ -1929,7 +1944,7 @@ func (m Model) sidebarRows() []sidebarRow {
 		showTabs := len(currentSpace.tabs) > 1
 		for tabIndex, currentTab := range currentSpace.tabs {
 			paneIndent := rail + "  "
-			paneNameWidth := sidebarWidth - 6
+			paneNameWidth := sidebarWidth - 7
 			if showTabs {
 				tabStyle := stylePaneDim
 				tabMarker := "  "
@@ -1942,7 +1957,7 @@ func (m Model) sidebarRows() []sidebarRow {
 					kind:  "tab", space: spaceIndex, tab: tabIndex, pane: -1,
 				})
 				paneIndent = rail + "    "
-				paneNameWidth = sidebarWidth - 8
+				paneNameWidth = sidebarWidth - 9
 			}
 
 			for paneIndex, currentPane := range currentTab.panes {
@@ -1956,10 +1971,14 @@ func (m Model) sidebarRows() []sidebarRow {
 					stateWidth++
 				}
 				name := truncate(m.paneDisplayName(currentPane), paneNameWidth-stateWidth)
-				nameLabel := stylePaneDim.Render(name)
-				if selected {
-					nameLabel = stylePaneSel.Render(name)
+				nameStyle := stylePaneDim
+				if currentPane.running {
+					nameStyle = stylePaneRun
 				}
+				if selected {
+					nameStyle = stylePaneSel
+				}
+				nameLabel := nameStyle.Render(name)
 				rows = append(rows, sidebarRow{
 					label: paneIndent + m.sidebarPaneIcon(currentPane) + " " + nameLabel + state,
 					kind:  "pane", space: spaceIndex, tab: tabIndex, pane: paneIndex,
