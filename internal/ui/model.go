@@ -1990,7 +1990,7 @@ func (m Model) sidebarRows() []sidebarRow {
 
 	rows = append(rows,
 		sidebarRow{},
-		sidebarRow{label: styleNewButton.Render("+ new workspace"), kind: "new", space: -1, tab: -1, pane: -1},
+		sidebarRow{label: " " + styleNewButton.Render("+ new workspace"), kind: "new", space: -1, tab: -1, pane: -1},
 	)
 	return rows
 }
@@ -2219,7 +2219,7 @@ func (m Model) renderSidebar() string {
 	// (●○↑↓), U+2699 is uncommon enough that some fonts (Windows
 	// Terminal's default among them) substitute a wider fallback glyph
 	// for it, which then overlaps a single following space.
-	rows = append(rows, stylePaneDim.Render("⚙  settings"), "")
+	rows = append(rows, " "+stylePaneDim.Render("⚙  settings"), "")
 
 	return lipgloss.NewStyle().
 		Width(sidebarWidth).
