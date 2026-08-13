@@ -613,6 +613,18 @@ func shellArgsFor(goos string) []string {
 // wires its output into a fresh pane terminal.
 func startHolderPane(client *holder.Client, reattach int64, command string, args []string, cwd string, cols, rows int) (*term.Pane, error) {
 	session := reattach
+	if session != 0 {
+		sessions, err := client.List()
+		if err != nil {
+			return nil, fmt.Errorf("inspect holder sessions: %w", err)
+		}
+		if !holderSessionMatchesWorkspace(sessions, session, cwd) {
+			// State and holder writes are independent. After an interrupted
+			// shutdown, a persisted id can refer to a session from another
+			// workspace. Never attach that PTY to the wrong workspace.
+			session = 0
+		}
+	}
 	if session == 0 {
 		started, err := client.Start(command, args, cwd, term.PaneEnv(), cols, rows)
 		if err != nil {
@@ -633,6 +645,16 @@ func startHolderPane(client *holder.Client, reattach int64, command string, args
 		pane.MarkExited()
 	}
 	return pane, nil
+}
+
+func holderSessionMatchesWorkspace(sessions []holder.SessionInfo, session int64, cwd string) bool {
+	wanted := filepath.Clean(cwd)
+	for _, current := range sessions {
+		if current.ID == session {
+			return filepath.Clean(current.CWD) == wanted
+		}
+	}
+	return false
 }
 
 // terminalArea is the local rect of the pane region (right of the sidebar,
@@ -1906,7 +1928,7 @@ func (m Model) sidebarRows() []sidebarRow {
 	for spaceIndex, currentSpace := range m.spaces {
 		if spaceIndex > 0 {
 			rows = append(rows, sidebarRow{
-				label: "  " + styleDivider.Render(strings.Repeat("─", sidebarWidth-4)),
+				label: " " + styleDivider.Render(strings.Repeat("─", sidebarWidth-2)),
 				kind:  "divider", space: spaceIndex, tab: -1, pane: -1,
 			})
 		}
@@ -1951,7 +1973,7 @@ func (m Model) sidebarRows() []sidebarRow {
 				tabMarker := "  "
 				if tabIndex == currentSpace.active {
 					tabStyle = styleSpaceSel
-					tabMarker = "▸ "
+					tabMarker = styleSpaceSel.Render("▸") + " "
 				}
 				rows = append(rows, sidebarRow{
 					label: rail + " " + tabMarker + tabStyle.Render(truncate(tabDisplayName(currentTab, tabIndex), sidebarWidth-6)),

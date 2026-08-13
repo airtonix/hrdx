@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/patriceckhart/hrdx/internal/holder"
 	"github.com/patriceckhart/hrdx/internal/state"
 	"github.com/patriceckhart/hrdx/internal/term"
 )
@@ -107,8 +108,8 @@ func TestSidebarHitMapsHierarchyRows(t *testing.T) {
 	if hit.kind != "pane" || hit.space != 0 || hit.tab != 0 || hit.pane != 0 {
 		t.Fatalf("row 4 = %+v, want space 0 tab 0 pane 0", hit)
 	}
-	if hit = model.sidebarHit(5); hit.kind != "divider" || !strings.HasPrefix(hit.label, "  ") || strings.Contains(hit.label, "└") {
-		t.Fatalf("row 5 = %+v, want an indented divider detached from the selection rail", hit)
+	if hit = model.sidebarHit(5); hit.kind != "divider" || !strings.HasPrefix(hit.label, " ") || strings.HasPrefix(hit.label, "  ") || lipgloss.Width(hit.label) != sidebarWidth-1 || strings.Contains(hit.label, "└") {
+		t.Fatalf("row 5 = %+v, want a divider aligned with workspace text and one cell from the right border", hit)
 	}
 	if hit = model.sidebarHit(9); hit.kind != "new" {
 		t.Fatalf("row 9 = %+v, want new workspace", hit)
@@ -268,6 +269,11 @@ func TestMouseSelectsSidebarTabAndPane(t *testing.T) {
 	currentSpace := model.spaces[0]
 	model.addTab(currentSpace, "shell")
 	currentSpace.active = 0
+
+	activeTab := model.sidebarRows()[4].label
+	if !strings.Contains(activeTab, styleSpaceSel.Render("▸")) || !strings.Contains(activeTab, styleSpaceSel.Render("1")) {
+		t.Fatalf("active tab marker and number should share the selected style: %q", activeTab)
+	}
 
 	// Sidebar rows: 3 workspace, 4 tab 1, 5 pane, 6 tab 2, 7 pane.
 	// Screen Y is sidebar row + 1.
@@ -478,6 +484,23 @@ func TestResolveDirRejectsMissing(t *testing.T) {
 	path, err := resolveDir(dir)
 	if err != nil || path == "" {
 		t.Fatalf("resolveDir(%s) = %q/%v", dir, path, err)
+	}
+}
+
+func TestHolderSessionMatchesWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	sessions := []holder.SessionInfo{
+		{ID: 7, CWD: workspace},
+		{ID: 8, CWD: t.TempDir()},
+	}
+	if !holderSessionMatchesWorkspace(sessions, 7, workspace) {
+		t.Fatal("matching holder session was rejected")
+	}
+	if holderSessionMatchesWorkspace(sessions, 8, workspace) {
+		t.Fatal("session from another workspace was accepted")
+	}
+	if holderSessionMatchesWorkspace(sessions, 9, workspace) {
+		t.Fatal("missing holder session was accepted")
 	}
 }
 
