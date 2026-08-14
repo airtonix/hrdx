@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/patriceckhart/hrdx/internal/state"
+	"github.com/patriceckhart/hrdx/internal/term"
 )
 
 // resetHarnesses removes all custom entries registered by a test.
@@ -32,7 +33,8 @@ func TestLoadHarnessesRegistersCustomKinds(t *testing.T) {
 	defer resetHarnesses()
 	dir := writeHarnessFile(t, `[
 		{"kind": "aider", "binary": "aider", "args": ["--no-auto-commits"],
-		 "resume": ["--restore-chat-history"], "busy": "Waiting for the model"},
+		 "resume": ["--restore-chat-history"], "busy": "Waiting for the model",
+		 "idle_title": "aider idle", "attention_title": "aider waiting"},
 		{"kind": "goose"}
 	]`)
 
@@ -43,7 +45,8 @@ func TestLoadHarnessesRegistersCustomKinds(t *testing.T) {
 		t.Fatal("custom kinds should register as agents")
 	}
 	spec := agentByKind("aider")
-	if spec.binary != "aider" || len(spec.args) != 1 || spec.busyMatch != "Waiting for the model" {
+	if spec.binary != "aider" || len(spec.args) != 1 || spec.busyMatch != "Waiting for the model" ||
+		spec.idleTitle != "aider idle" || spec.attentionTitle != "aider waiting" {
 		t.Fatalf("aider spec = %+v", spec)
 	}
 	if !spec.custom {
@@ -51,6 +54,75 @@ func TestLoadHarnessesRegistersCustomKinds(t *testing.T) {
 	}
 	if agentByKind("goose").binary != "goose" {
 		t.Fatal("binary should default to kind")
+	}
+}
+
+// titledPane registers a custom harness and returns a model whose first
+// pane in the second space runs it, ready to be fed terminal output.
+func titledPane(t *testing.T, spec harnessSpec) (Model, *pane) {
+	t.Helper()
+	if err := registerHarness(spec); err != nil {
+		t.Fatal(err)
+	}
+	model := New(Config{DefaultAgent: spec.Kind, Shell: "/bin/sh"}, []string{"/tmp/api", "/tmp/web"}, "", state.State{})
+	target := model.spaces[1].tab().panes[0]
+	target.term = term.NewHolderPane(nil, 1, 80, 24)
+	target.running = true
+	return model, target
+}
+
+// A harness that declares no title markers must behave exactly as it did
+// before title states existed: screen detection stays in charge. Guards the
+// strings.Contains(title, "") trap, where an unset marker would match every
+// title and pin the pane to a permanent idle state.
+func TestHarnessWithoutTitleStatesFallsBackToScreen(t *testing.T) {
+	defer resetHarnesses()
+	model, target := titledPane(t, harnessSpec{Kind: "plain"})
+
+	if spec := agentByKind("plain"); spec.idleTitle != "" || spec.attentionTitle != "" {
+		t.Fatalf("unset title states = %q/%q, want both empty", spec.idleTitle, spec.attentionTitle)
+	}
+	target.term.Feed([]byte("\x1b]2;plain — some arbitrary title\x07⠋ Working"))
+	if state := model.paneAgentTitleState(target); state != "" {
+		t.Fatalf("title state = %q, want empty so the screen scrape decides", state)
+	}
+	if !model.paneBusy(target) {
+		t.Fatal("visible spinner must still read as busy when no titles are declared")
+	}
+	if got, want := model.sidebarPaneIcon(target), paneIconCell(styleDotBusy, spinnerFrames[0]); got != want {
+		t.Fatalf("icon = %q, want animated spinner %q", got, want)
+	}
+}
+
+func TestHarnessAttentionTitleOverridesVisibleSpinner(t *testing.T) {
+	defer resetHarnesses()
+	model, target := titledPane(t, harnessSpec{
+		Kind: "titled", IdleTitle: "[ready]", AttentionTitle: "[ask]",
+	})
+	target.term.Feed([]byte("\x1b]2;[ask] waiting for input\x07⠋ Working"))
+
+	if state := model.paneAgentTitleState(target); state != "attention" {
+		t.Fatalf("title state = %q, want attention", state)
+	}
+	if model.paneBusy(target) {
+		t.Fatal("attention title must override the stale visible spinner")
+	}
+	if got, want := model.sidebarPaneIcon(target), paneIconCell(styleDotBusy, "●"); got != want {
+		t.Fatalf("unfocused waiting icon = %q, want static orange circle %q", got, want)
+	}
+
+	model.selected = 1
+	if got, want := model.sidebarPaneIcon(target), paneIconCell(styleDotOn, "●"); got != want {
+		t.Fatalf("focused waiting icon = %q, want acknowledged green circle %q", got, want)
+	}
+
+	target.term.Feed([]byte("\x1b]2;[ready] waiting for prompt\x07"))
+	if state := model.paneAgentTitleState(target); state != "idle" || model.paneBusy(target) {
+		t.Fatalf("idle title state/busy = %q/%v, want idle/false", state, model.paneBusy(target))
+	}
+	target.term.Feed([]byte("\x1b]2;⠙ working\x07"))
+	if state := model.paneAgentTitleState(target); state != "" || !model.paneBusy(target) {
+		t.Fatalf("working title state/busy = %q/%v, want empty/true", state, model.paneBusy(target))
 	}
 }
 

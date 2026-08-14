@@ -85,6 +85,7 @@ func (m *Model) jumpTo(chosen findCandidate) {
 	currentTab := owner.tab()
 	currentTab.selected = clampInt(chosen.paneIndex, 0, max(0, len(currentTab.panes)-1))
 	m.resizePanes(owner)
+	m.clearFocusedAttention()
 	m.closeFind()
 }
 

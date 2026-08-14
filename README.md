@@ -17,7 +17,7 @@
 hrdx is a experimental, minimal and lightweight terminal multiplexer built for the agent era: your projects as workspaces in a sidebar, tabs per workspace, and real terminal panes running [Codex CLI](https://learn.chatgpt.com/docs/codex/cli), [Claude Code](https://code.claude.com/docs/en/quickstart), [pi](https://www.pi.dev), [zot](https://www.zot.sh) or plain shells side by side. Kick off an agent in one project, switch to the next, and let the sidebar spinners tell you who is still working.
 
 - **Real terminals, not wrappers.** Every pane is a genuine PTY session with a full terminal emulator behind it. Agent TUIs run exactly as they do standalone: streaming, slash commands, sessions, mouse support, all of it. Panes present a clean terminal identity so capability-sniffing TUIs pick rendering paths that work inside a multiplexer, and `HRDX=1` lets tools detect they run inside hrdx.
-- **Everything in view.** The sidebar shows one hierarchy of workspaces, Git branches, and panes, adding tab rows only when a workspace has multiple tabs. Shell circles and agent diamonds expose pane type and state at a glance; an agent's icon becomes an animated braille spinner while it works.
+- **Everything in view.** The sidebar shows one hierarchy of workspaces, Git branches, and panes, adding tab rows only when a workspace has multiple tabs. Every pane has a shared status circle: agents become animated braille spinners while working, and an unfocused agent turns orange when it finishes. Focusing the pane acknowledges it and restores green.
 - **Feels like your terminal.** Scrollback, mouse selection with clipboard copy, drag-to-resize splits, drag-to-reorder workspaces, right-click context menus, and kitty keyboard protocol pass-through so even exotic chords like ctrl+1 reach your agent.
 - **Picks up where you left off.** Quit and relaunch: shells and agents keep running in a lightweight session holder and reattach exactly where they were, running commands and all. Workspaces, tabs, splits, and ratios come back too, and if a session is truly gone, agents resume their latest conversation from their own session store.
 - **Yours to tune.** A settings window (`ctrl+b ,` or the gear in the sidebar) lets you switch individual agents on or off, pick a notification sound for finished turns (including your own audio files), and change the color theme, with user themes as simple JSON files. All persisted. See [Themes](#themes).
@@ -177,7 +177,11 @@ Any agent CLI beyond the built-ins can be registered by dropping a `harness.json
     "resume": ["--restore-chat-history"],
     "busy": "Waiting for the model"
   },
-  { "kind": "goose" }
+  {
+    "kind": "goose",
+    "idle_title": "goose idle",
+    "attention_title": "goose waiting"
+  }
 ]
 ```
 
@@ -189,6 +193,15 @@ Any agent CLI beyond the built-ins can be registered by dropping a `harness.json
 | `resume` | Arguments that resume the latest session when a restored pane relaunches |
 | `resume_first` | Put the resume args before `args` (for subcommands like `resume --last`) |
 | `busy` | A substring visible on screen only while the harness is working; drives the busy spinner and the finish sound. Empty: braille spinner detection, like the built-ins |
+| `idle_title` | Terminal-title substring emitted when the harness is idle; overrides a stale visible spinner |
+| `attention_title` | Terminal-title substring emitted while waiting for user input; overrides the spinner and shows an orange dot when unfocused |
+
+Both title fields are optional and have no defaults, since every harness
+publishes its own markers. Leave them out and the harness is detected purely
+from the screen, exactly as `busy` describes. Set them when the harness keeps a
+spinner on screen while it is really idle or blocked on a prompt: a matching
+title always outranks the screen scrape. Check what your harness emits with
+`printf '\e]2;...\a'`-style OSC titles before picking a substring.
 
 ## Socket API
 
@@ -255,7 +268,7 @@ Values are ANSI 256 color numbers or `"#rrggbb"` strings.
 | `muted` | Secondary text, hints, idle pane names |
 | `faint` | Inactive pane borders, sidebar divider |
 | `good` | Running dots, input badge |
-| `busy` | Busy spinner |
+| `busy` | Busy spinner and completed-work attention dot |
 | `bad` | Errors, exited dots |
 | `bar_bg` / `bar_fg` | Header and footer bars |
 | `ink` | Text on accent backgrounds, tab bar strip |

@@ -34,6 +34,10 @@ type harnessSpec struct {
 	// visible while it is working (e.g. "esc to interrupt"). When empty
 	// the braille spinner detection used for the built-ins applies.
 	Busy string `json:"busy,omitempty"`
+	// IdleTitle and AttentionTitle are terminal-title substrings emitted when
+	// work is done or blocked on user input. Either overrides a stale spinner.
+	IdleTitle      string `json:"idle_title,omitempty"`
+	AttentionTitle string `json:"attention_title,omitempty"`
 }
 
 // loadHarnesses reads harness.json from dir and registers every valid
@@ -83,14 +87,20 @@ func registerHarness(spec harnessSpec) error {
 	if binary == "" {
 		binary = kind
 	}
+	// Title markers are per-harness and have no sensible default: an unset
+	// marker simply leaves screen-based busy detection in charge.
+	idleTitle := strings.TrimSpace(spec.IdleTitle)
+	attentionTitle := strings.TrimSpace(spec.AttentionTitle)
 	entry := agentSpec{
-		kind:        kind,
-		binary:      binary,
-		args:        append([]string{}, spec.Args...),
-		resume:      append([]string{}, spec.Resume...),
-		resumeFirst: spec.ResumeFirst,
-		busyMatch:   spec.Busy,
-		custom:      true,
+		kind:           kind,
+		binary:         binary,
+		args:           append([]string{}, spec.Args...),
+		resume:         append([]string{}, spec.Resume...),
+		resumeFirst:    spec.ResumeFirst,
+		busyMatch:      spec.Busy,
+		idleTitle:      idleTitle,
+		attentionTitle: attentionTitle,
+		custom:         true,
 	}
 	for index := range agentSpecs {
 		if agentSpecs[index].kind == kind {
