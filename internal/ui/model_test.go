@@ -2,6 +2,7 @@ package ui
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -304,6 +305,31 @@ func TestMouseSelectsSidebarTabAndPane(t *testing.T) {
 	}
 	if got.paneAttention[target.id] {
 		t.Fatal("clicking pane row did not clear focused attention")
+	}
+}
+
+func TestMouseSidebarPaneClickPersists(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	model := New(Config{Shell: "/bin/sh"}, []string{"/tmp/api"}, statePath, state.State{})
+	model.width, model.height = 120, 35
+	currentSpace := model.spaces[0]
+	model.addTab(currentSpace, "shell")
+	currentSpace.active = 0
+
+	// Sidebar rows: 3 workspace, 4 tab 1, 5 pane, 6 tab 2, 7 pane.
+	// Screen Y is sidebar row + 1, so Y=8 is tab 2's pane row.
+	model.updateMouse(tea.MouseMsg{X: 7, Y: 8, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+
+	saved, err := state.Load(statePath)
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if len(saved.Workspaces) != 1 {
+		t.Fatalf("saved workspaces = %d, want 1", len(saved.Workspaces))
+	}
+	if saved.Workspaces[0].Active != 1 {
+		t.Fatalf("saved active tab = %d, want 1 after clicking a pane on another tab",
+			saved.Workspaces[0].Active)
 	}
 }
 

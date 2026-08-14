@@ -1813,6 +1813,9 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				hit.pane >= 0 && hit.pane < len(target.tabs[hit.tab].panes) {
 				m.selected = hit.space
 				m.focusPane(target, target.tabs[hit.tab].panes[hit.pane])
+				// focusPane moves the active tab and that tab's selected
+				// pane, both of which belong to the saved state.
+				m.persist()
 			}
 		}
 	case "new":
