@@ -31,6 +31,24 @@ func TestSGRWithOmittedLeadingParameter(t *testing.T) {
 	}
 }
 
+func TestOmittedCSIParametersUseCommandDefaults(t *testing.T) {
+	emulator := New(WithSize(8, 4))
+	if _, err := emulator.Write([]byte("\x1b[;E")); err != nil {
+		t.Fatal(err)
+	}
+	if got := emulator.Cursor().Y; got != 1 {
+		t.Fatalf("CNL with omitted count moved to row %d, want 1", got)
+	}
+
+	if _, err := emulator.Write([]byte("\x1b[2;r")); err != nil {
+		t.Fatal(err)
+	}
+	state := emulator.(*terminal).State
+	if state.top != 1 || state.bottom != 3 {
+		t.Fatalf("scroll region = %d..%d, want 1..3", state.top, state.bottom)
+	}
+}
+
 func TestWriteBuffersUTF8RunesSplitAcrossCalls(t *testing.T) {
 	input := []byte("└──┘")
 	for split := 1; split < len(input); split++ {
