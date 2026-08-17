@@ -162,9 +162,21 @@ func TestSelectedWorkspaceRailSpansHierarchy(t *testing.T) {
 
 	rail := styleSpaceSel.Render("▍")
 	rows := model.sidebarRows()
-	for index := 3; index <= 8; index++ {
+	for index := 3; index <= 6; index++ {
 		if !strings.HasPrefix(rows[index].label, rail) {
 			t.Fatalf("row %d does not continue selected workspace rail: %q", index, rows[index].label)
+		}
+	}
+}
+
+func TestInactiveWorkspaceDoesNotShowAnActiveTab(t *testing.T) {
+	model := newTestModel("/tmp/api", "/tmp/web")
+	model.addTab(model.spaces[1], "shell")
+	model.selected = 0
+
+	for _, row := range model.sidebarRows() {
+		if row.kind == "pane" && row.space == 1 && strings.Contains(row.label, "▸") {
+			t.Fatalf("inactive workspace pane shows an active-tab marker: %q", row.label)
 		}
 	}
 }
@@ -279,32 +291,23 @@ func TestMouseSelectsSidebarTabAndPane(t *testing.T) {
 	target := currentSpace.tabs[1].panes[0]
 	model.paneAttention[target.id] = true
 
-	activeTab := model.sidebarRows()[4].label
-	if !strings.Contains(activeTab, styleSpaceSel.Render("▸")) || !strings.Contains(activeTab, styleSpaceSel.Render("1")) {
-		t.Fatalf("active tab marker and number should share the selected style: %q", activeTab)
+	activeTabPane := model.sidebarRows()[4].label
+	if !strings.Contains(activeTabPane, styleSpaceSel.Render("▸")) ||
+		!strings.Contains(activeTabPane, styleSpaceSel.Render("1")) ||
+		!strings.Contains(activeTabPane, "zot 1") {
+		t.Fatalf("first pane row should include the selected tab marker and number: %q", activeTabPane)
 	}
 
-	// Sidebar rows: 3 workspace, 4 tab 1, 5 pane, 6 tab 2, 7 pane.
+	// Sidebar rows: 3 workspace, 4 tab 1's first pane, 5 tab 2's first pane.
 	// Screen Y is sidebar row + 1.
-	updated, _ := model.updateMouse(tea.MouseMsg{X: 5, Y: 7, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	updated, _ := model.updateMouse(tea.MouseMsg{X: 7, Y: 6, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
 	got := updated.(Model)
-	if got.spaces[0].active != 1 {
-		t.Fatalf("active tab = %d, want 1 after clicking tab row", got.spaces[0].active)
-	}
-	if got.paneAttention[target.id] {
-		t.Fatal("clicking tab row did not clear focused attention")
-	}
-
-	got.spaces[0].active = 0
-	got.paneAttention[target.id] = true
-	updated, _ = got.updateMouse(tea.MouseMsg{X: 7, Y: 8, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
-	got = updated.(Model)
 	if got.spaces[0].active != 1 || got.spaces[0].tabs[1].selected != 0 {
-		t.Fatalf("active tab/pane = %d/%d, want 1/0 after clicking pane row",
+		t.Fatalf("active tab/pane = %d/%d, want 1/0 after clicking combined tab/pane row",
 			got.spaces[0].active, got.spaces[0].tabs[1].selected)
 	}
 	if got.paneAttention[target.id] {
-		t.Fatal("clicking pane row did not clear focused attention")
+		t.Fatal("clicking combined tab/pane row did not clear focused attention")
 	}
 }
 
@@ -316,9 +319,9 @@ func TestMouseSidebarPaneClickPersists(t *testing.T) {
 	model.addTab(currentSpace, "shell")
 	currentSpace.active = 0
 
-	// Sidebar rows: 3 workspace, 4 tab 1, 5 pane, 6 tab 2, 7 pane.
-	// Screen Y is sidebar row + 1, so Y=8 is tab 2's pane row.
-	model.updateMouse(tea.MouseMsg{X: 7, Y: 8, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	// Sidebar rows: 3 workspace, 4 tab 1's first pane, 5 tab 2's first pane.
+	// Screen Y is sidebar row + 1, so Y=6 is tab 2's combined row.
+	model.updateMouse(tea.MouseMsg{X: 7, Y: 6, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
 
 	saved, err := state.Load(statePath)
 	if err != nil {

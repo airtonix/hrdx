@@ -2018,25 +2018,34 @@ func (m Model) sidebarRows() []sidebarRow {
 		}
 
 		showTabs := len(currentSpace.tabs) > 1
+		tabNameWidth := 0
+		if showTabs {
+			for tabIndex, currentTab := range currentSpace.tabs {
+				name := truncate(tabDisplayName(currentTab, tabIndex), 6)
+				tabNameWidth = max(tabNameWidth, lipgloss.Width(name))
+			}
+		}
 		for tabIndex, currentTab := range currentSpace.tabs {
 			paneIndent := rail + "  "
 			paneNameWidth := sidebarWidth - 7
 			if showTabs {
-				tabStyle := stylePaneDim
-				tabMarker := "  "
-				if tabIndex == currentSpace.active {
-					tabStyle = styleSpaceSel
-					tabMarker = styleSpaceSel.Render("▸") + " "
-				}
-				rows = append(rows, sidebarRow{
-					label: rail + " " + tabMarker + tabStyle.Render(truncate(tabDisplayName(currentTab, tabIndex), sidebarWidth-6)),
-					kind:  "tab", space: spaceIndex, tab: tabIndex, pane: -1,
-				})
-				paneIndent = rail + "    "
-				paneNameWidth = sidebarWidth - 9
+				paneIndent = rail + strings.Repeat(" ", tabNameWidth+4)
+				paneNameWidth = sidebarWidth - tabNameWidth - 9
 			}
 
 			for paneIndex, currentPane := range currentTab.panes {
+				rowIndent := paneIndent
+				if showTabs && paneIndex == 0 {
+					tabStyle := stylePaneDim
+					tabMarker := "  "
+					if spaceIndex == m.selected && tabIndex == currentSpace.active {
+						tabStyle = styleSpaceSel
+						tabMarker = styleSpaceSel.Render("▸") + " "
+					}
+					tabName := truncate(tabDisplayName(currentTab, tabIndex), 6)
+					tabPadding := strings.Repeat(" ", tabNameWidth-lipgloss.Width(tabName))
+					rowIndent = rail + " " + tabMarker + tabStyle.Render(tabName) + tabPadding + " "
+				}
 				selected := spaceIndex == m.selected &&
 					tabIndex == currentSpace.active &&
 					paneIndex == currentTab.selected
@@ -2056,7 +2065,7 @@ func (m Model) sidebarRows() []sidebarRow {
 				}
 				nameLabel := nameStyle.Render(name)
 				rows = append(rows, sidebarRow{
-					label: paneIndent + m.sidebarPaneIcon(currentPane) + " " + nameLabel + state,
+					label: rowIndent + m.sidebarPaneIcon(currentPane) + " " + nameLabel + state,
 					kind:  "pane", space: spaceIndex, tab: tabIndex, pane: paneIndex,
 				})
 			}
