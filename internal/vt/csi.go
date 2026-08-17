@@ -45,6 +45,13 @@ func (c *csiEscape) parse() {
 	s = s[:len(s)-1]
 	ss := strings.Split(s, ";")
 	for _, p := range ss {
+		// ECMA-48 treats an omitted parameter as zero. Programs including
+		// fzf emit SGR sequences such as CSI ;38;5;110m, where the leading
+		// empty field resets attributes before applying the color.
+		if p == "" {
+			c.args = append(c.args, 0)
+			continue
+		}
 		i, err := strconv.Atoi(p)
 		if err != nil {
 			//t.logf("invalid CSI arg '%s'\n", p)
@@ -61,9 +68,14 @@ func (c *csiEscape) arg(i, def int) int {
 	return c.args[i]
 }
 
-// maxarg takes the maximum of arg(i, def) and def
-func (c *csiEscape) maxarg(i, def int) int {
-	return max(c.arg(i, def), def)
+// defaultArg returns def when a numeric parameter is omitted or zero.
+// ECMA-48 uses that rule for cursor movement and editing counts.
+func (c *csiEscape) defaultArg(i, def int) int {
+	value := c.arg(i, def)
+	if value <= 0 {
+		return def
+	}
+	return value
 }
 
 func (t *State) handleCSI() {
@@ -72,11 +84,11 @@ func (t *State) handleCSI() {
 	default:
 		goto unknown
 	case '@': // ICH - insert <n> blank char
-		t.insertBlanks(c.arg(0, 1))
+		t.insertBlanks(c.defaultArg(0, 1))
 	case 'A': // CUU - cursor <n> up
-		t.moveTo(t.cur.X, t.cur.Y-c.maxarg(0, 1))
+		t.moveTo(t.cur.X, t.cur.Y-c.defaultArg(0, 1))
 	case 'B', 'e': // CUD, VPR - cursor <n> down
-		t.moveTo(t.cur.X, t.cur.Y+c.maxarg(0, 1))
+		t.moveTo(t.cur.X, t.cur.Y+c.defaultArg(0, 1))
 	case 'c': // DA1 - primary device attributes
 		if !c.priv && c.arg(0, 0) == 0 {
 			// Identify as a VT100 with the advanced video option. Shells such
@@ -84,13 +96,13 @@ func (t *State) handleCSI() {
 			_, _ = t.w.Write([]byte("\033[?1;2c"))
 		}
 	case 'C', 'a': // CUF, HPR - cursor <n> forward
-		t.moveTo(t.cur.X+c.maxarg(0, 1), t.cur.Y)
+		t.moveTo(t.cur.X+c.defaultArg(0, 1), t.cur.Y)
 	case 'D': // CUB - cursor <n> backward
-		t.moveTo(t.cur.X-c.maxarg(0, 1), t.cur.Y)
+		t.moveTo(t.cur.X-c.defaultArg(0, 1), t.cur.Y)
 	case 'E': // CNL - cursor <n> down and first col
-		t.moveTo(0, t.cur.Y+c.arg(0, 1))
+		t.moveTo(0, t.cur.Y+c.defaultArg(0, 1))
 	case 'F': // CPL - cursor <n> up and first col
-		t.moveTo(0, t.cur.Y-c.arg(0, 1))
+		t.moveTo(0, t.cur.Y-c.defaultArg(0, 1))
 	case 'g': // TBC - tabulation clear
 		switch c.arg(0, 0) {
 		// clear current tab stop
@@ -105,11 +117,11 @@ func (t *State) handleCSI() {
 			goto unknown
 		}
 	case 'G', '`': // CHA, HPA - Move to <col>
-		t.moveTo(c.arg(0, 1)-1, t.cur.Y)
+		t.moveTo(c.defaultArg(0, 1)-1, t.cur.Y)
 	case 'H', 'f': // CUP, HVP - move to <row> <col>
-		t.moveAbsTo(c.arg(1, 1)-1, c.arg(0, 1)-1)
+		t.moveAbsTo(c.defaultArg(1, 1)-1, c.defaultArg(0, 1)-1)
 	case 'I': // CHT - cursor forward tabulation <n> tab stops
-		n := c.arg(0, 1)
+		n := c.defaultArg(0, 1)
 		for i := 0; i < n; i++ {
 			t.putTab(true)
 		}
@@ -141,26 +153,26 @@ func (t *State) handleCSI() {
 			t.clear(0, t.cur.Y, t.cols-1, t.cur.Y)
 		}
 	case 'S': // SU - scroll <n> lines up
-		t.scrollUp(t.top, c.arg(0, 1))
+		t.scrollUp(t.top, c.defaultArg(0, 1))
 	case 'T': // SD - scroll <n> lines down
-		t.scrollDown(t.top, c.arg(0, 1))
+		t.scrollDown(t.top, c.defaultArg(0, 1))
 	case 'L': // IL - insert <n> blank lines
-		t.insertBlankLines(c.arg(0, 1))
+		t.insertBlankLines(c.defaultArg(0, 1))
 	case 'l': // RM - reset mode
 		t.setMode(c.priv, false, c.args)
 	case 'M': // DL - delete <n> lines
-		t.deleteLines(c.arg(0, 1))
+		t.deleteLines(c.defaultArg(0, 1))
 	case 'X': // ECH - erase <n> chars
-		t.clear(t.cur.X, t.cur.Y, t.cur.X+c.arg(0, 1)-1, t.cur.Y)
+		t.clear(t.cur.X, t.cur.Y, t.cur.X+c.defaultArg(0, 1)-1, t.cur.Y)
 	case 'P': // DCH - delete <n> chars
-		t.deleteChars(c.arg(0, 1))
+		t.deleteChars(c.defaultArg(0, 1))
 	case 'Z': // CBT - cursor backward tabulation <n> tab stops
-		n := c.arg(0, 1)
+		n := c.defaultArg(0, 1)
 		for i := 0; i < n; i++ {
 			t.putTab(false)
 		}
 	case 'd': // VPA - move to <row>
-		t.moveAbsTo(t.cur.X, c.arg(0, 1)-1)
+		t.moveAbsTo(t.cur.X, c.defaultArg(0, 1)-1)
 	case 'h': // SM - set terminal mode
 		t.setMode(c.priv, true, c.args)
 	case 'm': // SGR - terminal attribute (color)
@@ -176,7 +188,7 @@ func (t *State) handleCSI() {
 		if c.priv {
 			goto unknown
 		} else {
-			t.setScroll(c.arg(0, 1)-1, c.arg(1, t.rows)-1)
+			t.setScroll(c.defaultArg(0, 1)-1, c.defaultArg(1, t.rows)-1)
 			t.moveAbsTo(0, 0)
 		}
 	case 's': // DECSC - save cursor position (ANSI.SYS)

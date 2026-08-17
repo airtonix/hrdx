@@ -16,6 +16,39 @@ func TestPrimaryDeviceAttributesResponse(t *testing.T) {
 	}
 }
 
+func TestSGRWithOmittedLeadingParameter(t *testing.T) {
+	terminal := New(WithSize(8, 2))
+	// fzf prefixes its SGR parameter list with an omitted parameter.
+	if _, err := terminal.Write([]byte("\x1b[;1;38;5;110;48;5;236mX")); err != nil {
+		t.Fatal(err)
+	}
+	terminal.Lock()
+	defer terminal.Unlock()
+
+	got := terminal.Cell(0, 0)
+	if got.Char != 'X' || got.Mode&attrBold == 0 || got.FG != Color(110) || got.BG != Color(236) {
+		t.Fatalf("styled cell = %+v, want bold fg=110 bg=236", got)
+	}
+}
+
+func TestOmittedCSIParametersUseCommandDefaults(t *testing.T) {
+	emulator := New(WithSize(8, 4))
+	if _, err := emulator.Write([]byte("\x1b[;E")); err != nil {
+		t.Fatal(err)
+	}
+	if got := emulator.Cursor().Y; got != 1 {
+		t.Fatalf("CNL with omitted count moved to row %d, want 1", got)
+	}
+
+	if _, err := emulator.Write([]byte("\x1b[2;r")); err != nil {
+		t.Fatal(err)
+	}
+	state := emulator.(*terminal).State
+	if state.top != 1 || state.bottom != 3 {
+		t.Fatalf("scroll region = %d..%d, want 1..3", state.top, state.bottom)
+	}
+}
+
 func TestWriteBuffersUTF8RunesSplitAcrossCalls(t *testing.T) {
 	input := []byte("└──┘")
 	for split := 1; split < len(input); split++ {
