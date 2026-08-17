@@ -16,6 +16,21 @@ func TestPrimaryDeviceAttributesResponse(t *testing.T) {
 	}
 }
 
+func TestSGRWithOmittedLeadingParameter(t *testing.T) {
+	terminal := New(WithSize(8, 2))
+	// fzf prefixes its SGR parameter list with an omitted parameter.
+	if _, err := terminal.Write([]byte("\x1b[;1;38;5;110;48;5;236mX")); err != nil {
+		t.Fatal(err)
+	}
+	terminal.Lock()
+	defer terminal.Unlock()
+
+	got := terminal.Cell(0, 0)
+	if got.Char != 'X' || got.Mode&attrBold == 0 || got.FG != Color(110) || got.BG != Color(236) {
+		t.Fatalf("styled cell = %+v, want bold fg=110 bg=236", got)
+	}
+}
+
 func TestWriteBuffersUTF8RunesSplitAcrossCalls(t *testing.T) {
 	input := []byte("└──┘")
 	for split := 1; split < len(input); split++ {

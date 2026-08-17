@@ -45,6 +45,13 @@ func (c *csiEscape) parse() {
 	s = s[:len(s)-1]
 	ss := strings.Split(s, ";")
 	for _, p := range ss {
+		// ECMA-48 treats an omitted parameter as zero. Programs including
+		// fzf emit SGR sequences such as CSI ;38;5;110m, where the leading
+		// empty field resets attributes before applying the color.
+		if p == "" {
+			c.args = append(c.args, 0)
+			continue
+		}
 		i, err := strconv.Atoi(p)
 		if err != nil {
 			//t.logf("invalid CSI arg '%s'\n", p)
