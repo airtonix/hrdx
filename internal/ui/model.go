@@ -2038,7 +2038,7 @@ func (m Model) sidebarRows() []sidebarRow {
 				if showTabs && paneIndex == 0 {
 					tabStyle := stylePaneDim
 					tabMarker := "  "
-					if tabIndex == currentSpace.active {
+					if spaceIndex == m.selected && tabIndex == currentSpace.active {
 						tabStyle = styleSpaceSel
 						tabMarker = styleSpaceSel.Render("▸") + " "
 					}

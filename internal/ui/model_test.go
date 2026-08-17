@@ -169,6 +169,18 @@ func TestSelectedWorkspaceRailSpansHierarchy(t *testing.T) {
 	}
 }
 
+func TestInactiveWorkspaceDoesNotShowAnActiveTab(t *testing.T) {
+	model := newTestModel("/tmp/api", "/tmp/web")
+	model.addTab(model.spaces[1], "shell")
+	model.selected = 0
+
+	for _, row := range model.sidebarRows() {
+		if row.kind == "pane" && row.space == 1 && strings.Contains(row.label, "▸") {
+			t.Fatalf("inactive workspace pane shows an active-tab marker: %q", row.label)
+		}
+	}
+}
+
 func TestSidebarPaneRowsUseSharedShellAndAgentSymbols(t *testing.T) {
 	model := newTestModel("/tmp/api")
 	rows := model.sidebarRows()
