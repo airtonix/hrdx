@@ -89,10 +89,44 @@ func TestTrackBusyDebouncesSound(t *testing.T) {
 		t.Fatal("transition should consume the busy mark")
 	}
 
-	// With sound off nothing is scheduled.
+	// Attention still needs a debounced completion when sound is off.
 	model.soundOn = false
 	model.wasBusy[target.id] = true
-	if cmd := model.trackBusy(target); cmd != nil {
-		t.Fatal("sound off must not schedule a confirm tick")
+	if cmd := model.trackBusy(target); cmd == nil {
+		t.Fatal("sound off must still schedule completion confirmation")
+	}
+}
+
+func TestAgentFinishSetsAttentionWhenUnfocused(t *testing.T) {
+	model := newTestModel("/tmp/api", "/tmp/web")
+	target := model.spaces[1].tab().panes[0]
+	model.wasBusy[target.id] = true
+	if cmd := model.trackBusy(target); cmd == nil {
+		t.Fatal("busy -> idle should schedule confirmation")
+	}
+
+	updated, _ := model.Update(soundConfirmMsg{id: target.id, seq: model.soundSeq[target.id]})
+	model = updated.(Model)
+	if !model.paneAttention[target.id] {
+		t.Fatal("confirmed unfocused agent finish did not set attention")
+	}
+}
+
+func TestFocusedAndStaleAgentFinishDoNotSetAttention(t *testing.T) {
+	model := newTestModel("/tmp/api", "/tmp/web")
+	focused := model.spaces[0].tab().panes[0]
+	model.soundSeq[focused.id] = 1
+	updated, _ := model.Update(soundConfirmMsg{id: focused.id, seq: 1})
+	model = updated.(Model)
+	if model.paneAttention[focused.id] {
+		t.Fatal("focused agent finish set attention")
+	}
+
+	target := model.spaces[1].tab().panes[0]
+	model.soundSeq[target.id] = 2
+	updated, _ = model.Update(soundConfirmMsg{id: target.id, seq: 1})
+	model = updated.(Model)
+	if model.paneAttention[target.id] {
+		t.Fatal("stale finish timer set attention")
 	}
 }

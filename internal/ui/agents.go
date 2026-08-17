@@ -3,18 +3,21 @@ package ui
 import (
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // agentSpec describes one supported coding agent CLI, built in or
 // registered as a custom harness from harness.json.
 type agentSpec struct {
-	kind        string
-	binary      string   // default binary name on $PATH
-	args        []string // extra launch args (custom harnesses)
-	resume      []string // args that resume the latest session
-	resumeFirst bool     // resume args are a subcommand and must come first
-	busyMatch   string   // screen substring visible while working; "" = spinner
-	custom      bool     // registered from harness.json
+	kind           string
+	binary         string   // default binary name on $PATH
+	args           []string // extra launch args (custom harnesses)
+	resume         []string // args that resume the latest session
+	resumeFirst    bool     // resume args are a subcommand and must come first
+	busyMatch      string   // screen substring visible while working; "" = spinner
+	idleTitle      string   // terminal-title substring that overrides stale busy UI
+	attentionTitle string   // title substring indicating the agent is waiting on the user
+	custom         bool     // registered from harness.json
 }
 
 // agentSpecs lists the supported agents in menu/cycle order
@@ -69,6 +72,28 @@ func (m Model) paneAgentKind(currentPane *pane) string {
 		if foreground == spec.binary || foreground == filepath.Base(m.config.binaryFor(spec.kind)) {
 			return spec.kind
 		}
+	}
+	return ""
+}
+
+// paneAgentTitleState interprets optional machine-readable title markers from
+// custom harnesses. Attention and idle titles override stale on-screen
+// spinners; an empty result leaves normal screen-based detection in charge.
+func (m Model) paneAgentTitleState(currentPane *pane) string {
+	if currentPane == nil || currentPane.term == nil || !currentPane.running {
+		return ""
+	}
+	kind := m.paneAgentKind(currentPane)
+	spec := agentByKind(kind)
+	if spec == nil {
+		return ""
+	}
+	title := currentPane.term.Title()
+	if spec.attentionTitle != "" && strings.Contains(title, spec.attentionTitle) {
+		return "attention"
+	}
+	if spec.idleTitle != "" && strings.Contains(title, spec.idleTitle) {
+		return "idle"
 	}
 	return ""
 }

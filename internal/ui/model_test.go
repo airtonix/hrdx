@@ -2,6 +2,7 @@ package ui
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -182,17 +183,23 @@ func TestSidebarPaneRowsUseSharedShellAndAgentSymbols(t *testing.T) {
 	}
 
 	shell := &pane{kind: "shell", running: true}
-	if got, want := paneTypeStateIcon(shell, false, false, 0), paneIconCell(styleDotOn, "●"); got != want {
+	if got, want := paneTypeStateIcon(shell, false, false, false, 0), paneIconCell(styleDotOn, "●"); got != want {
 		t.Fatalf("running shell icon = %q, want %q", got, want)
 	}
 	agent := &pane{kind: "zot", running: true}
-	if got, want := paneTypeStateIcon(agent, true, false, 0), paneIconCell(styleDotOn, "●"); got != want {
+	if got, want := paneTypeStateIcon(agent, true, false, false, 0), paneIconCell(styleDotOn, "●"); got != want {
 		t.Fatalf("idle agent icon = %q, want shared shell icon %q", got, want)
 	}
-	if got, want := paneTypeStateIcon(agent, true, true, 0), paneIconCell(styleDotBusy, spinnerFrames[0]); got != want {
+	if got, want := paneTypeStateIcon(agent, true, true, false, 0), paneIconCell(styleDotBusy, spinnerFrames[0]); got != want {
 		t.Fatalf("busy agent icon = %q, want animated spinner %q", got, want)
 	}
-	if width := lipgloss.Width(paneTypeStateIcon(agent, true, false, 0)); width != 2 {
+	if got, want := paneTypeStateIcon(agent, true, false, true, 0), paneIconCell(styleDotBusy, "●"); got != want {
+		t.Fatalf("completed agent icon = %q, want static orange circle %q", got, want)
+	}
+	if got, want := paneTypeStateIcon(agent, true, true, true, 0), paneIconCell(styleDotBusy, spinnerFrames[0]); got != want {
+		t.Fatalf("busy attentive agent icon = %q, want spinner to take precedence %q", got, want)
+	}
+	if width := lipgloss.Width(paneTypeStateIcon(agent, true, false, false, 0)); width != 2 {
 		t.Fatalf("agent icon width = %d, want fixed two-cell column", width)
 	}
 }
@@ -269,6 +276,8 @@ func TestMouseSelectsSidebarTabAndPane(t *testing.T) {
 	currentSpace := model.spaces[0]
 	model.addTab(currentSpace, "shell")
 	currentSpace.active = 0
+	target := currentSpace.tabs[1].panes[0]
+	model.paneAttention[target.id] = true
 
 	activeTab := model.sidebarRows()[4].label
 	if !strings.Contains(activeTab, styleSpaceSel.Render("▸")) || !strings.Contains(activeTab, styleSpaceSel.Render("1")) {
@@ -282,13 +291,45 @@ func TestMouseSelectsSidebarTabAndPane(t *testing.T) {
 	if got.spaces[0].active != 1 {
 		t.Fatalf("active tab = %d, want 1 after clicking tab row", got.spaces[0].active)
 	}
+	if got.paneAttention[target.id] {
+		t.Fatal("clicking tab row did not clear focused attention")
+	}
 
 	got.spaces[0].active = 0
+	got.paneAttention[target.id] = true
 	updated, _ = got.updateMouse(tea.MouseMsg{X: 7, Y: 8, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
 	got = updated.(Model)
 	if got.spaces[0].active != 1 || got.spaces[0].tabs[1].selected != 0 {
 		t.Fatalf("active tab/pane = %d/%d, want 1/0 after clicking pane row",
 			got.spaces[0].active, got.spaces[0].tabs[1].selected)
+	}
+	if got.paneAttention[target.id] {
+		t.Fatal("clicking pane row did not clear focused attention")
+	}
+}
+
+func TestMouseSidebarPaneClickPersists(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	model := New(Config{Shell: "/bin/sh"}, []string{"/tmp/api"}, statePath, state.State{})
+	model.width, model.height = 120, 35
+	currentSpace := model.spaces[0]
+	model.addTab(currentSpace, "shell")
+	currentSpace.active = 0
+
+	// Sidebar rows: 3 workspace, 4 tab 1, 5 pane, 6 tab 2, 7 pane.
+	// Screen Y is sidebar row + 1, so Y=8 is tab 2's pane row.
+	model.updateMouse(tea.MouseMsg{X: 7, Y: 8, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+
+	saved, err := state.Load(statePath)
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if len(saved.Workspaces) != 1 {
+		t.Fatalf("saved workspaces = %d, want 1", len(saved.Workspaces))
+	}
+	if saved.Workspaces[0].Active != 1 {
+		t.Fatalf("saved active tab = %d, want 1 after clicking a pane on another tab",
+			saved.Workspaces[0].Active)
 	}
 }
 
@@ -600,12 +641,16 @@ func TestCloseCurrentPaneClamps(t *testing.T) {
 	if currentTab.selected != 1 {
 		t.Fatalf("selected pane = %d, want 1", currentTab.selected)
 	}
+	model.paneAttention[currentTab.panes[0].id] = true
 	model.closeCurrentPane()
 	if len(currentTab.panes) != 1 || currentTab.selected != 0 {
 		t.Fatalf("panes = %d selected = %d, want 1/0", len(currentTab.panes), currentTab.selected)
 	}
 	if !strings.HasPrefix(currentTab.panes[0].name, "zot") {
 		t.Fatalf("remaining pane = %q, want the zot pane", currentTab.panes[0].name)
+	}
+	if model.paneAttention[currentTab.panes[0].id] {
+		t.Fatal("newly focused sibling retained attention after pane close")
 	}
 }
 
@@ -642,5 +687,64 @@ func TestGitBranchDetection(t *testing.T) {
 	}
 	if branch := readGitBranch(dir); branch != "0123456" {
 		t.Fatalf("detached branch = %q, want short hash", branch)
+	}
+}
+
+func TestBlurredAgentFinishGetsAttentionUntilAppFocusReturns(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	target := model.currentPane()
+	updated, _ := model.Update(tea.BlurMsg{})
+	model = updated.(Model)
+	model.soundSeq[target.id] = 1
+	updated, _ = model.Update(soundConfirmMsg{id: target.id, seq: 1})
+	model = updated.(Model)
+	if !model.paneAttention[target.id] {
+		t.Fatal("agent completion while application was blurred did not set attention")
+	}
+
+	updated, _ = model.Update(tea.FocusMsg{})
+	model = updated.(Model)
+	if model.paneAttention[target.id] {
+		t.Fatal("application focus did not acknowledge the focused pane")
+	}
+}
+
+func TestFocusNavigationClearsAttention(t *testing.T) {
+	t.Run("tab", func(t *testing.T) {
+		model := newTestModel("/tmp/api")
+		owner := model.currentSpace()
+		first := owner.tab().panes[0]
+		model.addTab(owner, "shell")
+		model.paneAttention[first.id] = true
+		model.selectTab(-1)
+		if model.paneAttention[first.id] {
+			t.Fatal("tab selection did not clear attention")
+		}
+	})
+
+	t.Run("pane", func(t *testing.T) {
+		model := newTestModel("/tmp/api")
+		owner := model.currentSpace()
+		first := owner.tab().panes[0]
+		model.addPane(owner, "shell", true)
+		model.paneAttention[first.id] = true
+		model.cyclePane(1)
+		if model.paneAttention[first.id] {
+			t.Fatal("pane cycling did not clear attention")
+		}
+	})
+}
+
+func TestRemovePaneClearsCompletionState(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	owner := model.currentSpace()
+	target := model.addPane(owner, "shell", true)
+	model.wasBusy[target.id] = true
+	model.soundSeq[target.id] = 2
+	model.paneAttention[target.id] = true
+
+	model.removePane(owner, target)
+	if model.wasBusy[target.id] || model.soundSeq[target.id] != 0 || model.paneAttention[target.id] {
+		t.Fatal("removed pane retained completion state")
 	}
 }

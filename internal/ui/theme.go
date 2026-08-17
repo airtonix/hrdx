@@ -25,7 +25,7 @@ type themeColors struct {
 	Muted  json.RawMessage `json:"muted,omitempty"`  // secondary text
 	Faint  json.RawMessage `json:"faint,omitempty"`  // inactive borders
 	Good   json.RawMessage `json:"good,omitempty"`   // running dots, ok badge
-	Busy   json.RawMessage `json:"busy,omitempty"`   // busy spinner
+	Busy   json.RawMessage `json:"busy,omitempty"`   // busy spinner, completed-work dot
 	Bad    json.RawMessage `json:"bad,omitempty"`    // errors, exited dots
 	BarBg  json.RawMessage `json:"bar_bg,omitempty"` // header/footer background
 	BarFg  json.RawMessage `json:"bar_fg,omitempty"` // header/footer text

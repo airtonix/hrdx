@@ -153,7 +153,9 @@ type Model struct {
 	soundKind     string          // which sound: "ding" or a sounds.json entry
 	notifyOn      bool            // post a desktop notification on finish
 	themeName     string          // active color theme, "default" or a themes/ file
-	wasBusy       map[int]bool    // pane id -> spinner seen, for the finish sound
+	wasBusy       map[int]bool    // pane id -> spinner seen, for finish notifications
+	soundSeq      map[int]uint64  // invalidates stale agent-finish confirmations
+	paneAttention map[int]bool    // completed while unfocused; cleared only by focus
 	settingsTab   int             // active tab of the settings window
 	settingsIndex int             // selected row of the settings window
 	completions   []string
@@ -166,6 +168,7 @@ type Model struct {
 	events        *api.Broadcaster  // API event fan-out, nil-safe
 	holder        *holder.Client    // session holder connection, nil = local panes
 	blurredAt     time.Time         // when the terminal lost focus, for stale detection
+	appBlurred    bool              // terminal application currently lacks focus
 	cursorSink    *CursorSink       // publishes the hardware cursor position, nil-safe
 	prefixKeys    map[string]string // prefix key -> action, defaults plus keys.json
 	prefixTrigger string            // key that enters prefix mode from a live terminal
@@ -296,16 +299,26 @@ func (m *Model) flashInfo(text string) tea.Cmd {
 }
 
 // soundConfirmMsg fires a moment after a pane went from busy to idle; the
-// sound only plays when the pane is still idle then, so short redraw gaps
-// in the child's spinner do not ring the bell mid-turn.
-type soundConfirmMsg struct{ id int }
+// completion only counts when the pane is still idle then, so short redraw
+// gaps in the child's spinner do not create attention or ring mid-turn.
+type soundConfirmMsg struct {
+	id  int
+	seq uint64
+}
 
-// trackBusy watches one pane's busy state. On a busy -> idle transition it
-// schedules a debounced confirmation before playing the finish sound and
-// notifies API subscribers of the state change.
+func (m *Model) clearFocusedAttention() {
+	if focused := m.currentPane(); focused != nil {
+		delete(m.paneAttention, focused.id)
+	}
+}
+
+// trackBusy watches one pane's agent-busy state. On a busy -> idle
+// transition it schedules a debounced completion confirmation and notifies
+// API subscribers of the state change.
 func (m *Model) trackBusy(target *pane) tea.Cmd {
 	if m.paneBusy(target) {
 		if !m.wasBusy[target.id] {
+			m.soundSeq[target.id]++
 			m.publish(api.Event{Event: api.EventPaneBusyChanged,
 				Data: api.PaneEvent{Pane: target.id, Name: target.name, Kind: target.kind, Busy: true}})
 		}
@@ -318,11 +331,11 @@ func (m *Model) trackBusy(target *pane) tea.Cmd {
 	delete(m.wasBusy, target.id)
 	m.publish(api.Event{Event: api.EventPaneBusyChanged,
 		Data: api.PaneEvent{Pane: target.id, Name: target.name, Kind: target.kind, Busy: false}})
-	if !m.soundOn && !m.notifyOn {
-		return nil
-	}
-	id := target.id
-	return tea.Tick(1500*time.Millisecond, func(time.Time) tea.Msg { return soundConfirmMsg{id: id} })
+	m.soundSeq[target.id]++
+	id, seq := target.id, m.soundSeq[target.id]
+	return tea.Tick(1500*time.Millisecond, func(time.Time) tea.Msg {
+		return soundConfirmMsg{id: id, seq: seq}
+	})
 }
 
 // spinnerFrames matches zot's own braille spinner.
@@ -399,7 +412,8 @@ func New(config Config, paths []string, statePath string, saved state.State) Mod
 
 	model := Model{config: config, input: input, nextID: 1, statePath: statePath,
 		branches: map[string]branchInfo{}, disabled: map[string]bool{},
-		wasBusy: map[int]bool{}, soundOn: saved.Sound, status: harnessProblem,
+		wasBusy: map[int]bool{}, soundSeq: map[int]uint64{}, paneAttention: map[int]bool{},
+		soundOn: saved.Sound, status: harnessProblem,
 		soundKind: saved.SoundKind, notifyOn: saved.Notify, themeName: saved.Theme,
 		prefixKeys: buildPrefixKeys(keymapOverrides), keyOverrides: keymapOverrides}
 	model.prefixTrigger = model.primaryKey("prefix")
@@ -710,12 +724,16 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.FocusMsg:
+		m.appBlurred = false
+		m.clearFocusedAttention()
 		// Regaining focus after a long absence (system sleep, display
 		// reattach) can leave stale artifacts: the renderer's line cache
 		// no longer matches what is really on screen. Repaint everything
 		// then. Quick app switches skip the clear, which would otherwise
 		// flicker the whole UI on every alt-tab.
-		if m.blurredAt.IsZero() || time.Since(m.blurredAt) < staleAfter {
+		blurredAt := m.blurredAt
+		m.blurredAt = time.Time{}
+		if blurredAt.IsZero() || time.Since(blurredAt) < staleAfter {
 			return m, nil
 		}
 		for _, currentSpace := range m.spaces {
@@ -725,6 +743,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.BlurMsg:
 		m.blurredAt = time.Now()
+		m.appBlurred = true
 		return m, nil
 
 	case paneStartedMsg:
@@ -791,6 +810,9 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(sounds...)
 
 	case soundConfirmMsg:
+		if m.soundSeq[msg.id] != msg.seq {
+			return m, nil
+		}
 		target, _ := m.paneByID(msg.id)
 		if target == nil {
 			return m, nil
@@ -800,6 +822,9 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			// finished turn. trackBusy re-arms the transition.
 			m.wasBusy[msg.id] = true
 			return m, nil
+		}
+		if focused := m.currentPane(); m.appBlurred || focused == nil || focused.id != target.id {
+			m.paneAttention[target.id] = true
 		}
 		if m.soundOn {
 			playSound(m.soundKind)
@@ -1521,6 +1546,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if index >= 0 {
 				currentSpace.active = index
 				m.resizePanes(currentSpace)
+				m.clearFocusedAttention()
 				m.openTabMenu(currentSpace.tabs[index], rect{x: msg.X, y: 1})
 			}
 			return m, nil
@@ -1535,6 +1561,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if index >= 0 {
 			currentSpace.active = index
 			m.resizePanes(currentSpace)
+			m.clearFocusedAttention()
 			m.persist()
 		}
 		return m, nil
@@ -1747,6 +1774,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		descendant := hit.kind == "space" || hit.kind == "tab" || hit.kind == "pane"
 		if descendant && hit.space >= 0 && hit.space < len(m.spaces) {
 			m.selected = hit.space
+			m.clearFocusedAttention()
 			m.openSpaceMenu(m.spaces[hit.space], rect{x: msg.X, y: msg.Y - 1})
 		}
 		return m, nil
@@ -1761,6 +1789,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case "space":
 		if hit.space >= 0 && hit.space < len(m.spaces) {
 			m.selected = hit.space
+			m.clearFocusedAttention()
 			// Arm a reorder drag; a plain click releases without motion
 			// and leaves the order untouched.
 			m.dragSpace = m.spaces[hit.space]
@@ -1773,6 +1802,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				m.selected = hit.space
 				target.active = hit.tab
 				m.resizePanes(target)
+				m.clearFocusedAttention()
 				m.persist()
 			}
 		}
@@ -1783,6 +1813,9 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				hit.pane >= 0 && hit.pane < len(target.tabs[hit.tab].panes) {
 				m.selected = hit.space
 				m.focusPane(target, target.tabs[hit.tab].panes[hit.pane])
+				// focusPane moves the active tab and that tab's selected
+				// pane, both of which belong to the saved state.
+				m.persist()
 			}
 		}
 	case "new":
@@ -1839,6 +1872,7 @@ func (m *Model) focusPane(owner *space, target *pane) {
 			if current == target {
 				owner.active = tabIndex
 				currentTab.selected = index
+				m.clearFocusedAttention()
 				return
 			}
 		}
@@ -1861,8 +1895,18 @@ type sidebarRow struct {
 // are detected by the braille spinner their TUIs render during a turn;
 // custom harnesses can declare a busy substring instead.
 func (m Model) paneBusy(currentPane *pane) bool {
+	return m.paneBusyWithTitle(currentPane, m.paneAgentTitleState(currentPane))
+}
+
+// paneBusyWithTitle is paneBusy with the title state already resolved, so the
+// sidebar can share one lookup between the busy check and the attention dot.
+// Any non-empty title state is authoritative and outranks the screen scrape.
+func (m Model) paneBusyWithTitle(currentPane *pane, titleState string) bool {
 	kind := m.paneAgentKind(currentPane)
 	if kind == "" || !currentPane.running || currentPane.term == nil {
+		return false
+	}
+	if titleState != "" {
 		return false
 	}
 	if spec := agentByKind(kind); spec != nil && spec.busyMatch != "" {
@@ -1875,10 +1919,17 @@ func (m Model) paneBusy(currentPane *pane) bool {
 // color and animation expose pane state. Agents animate only while active;
 // an idle agent process stays a dot.
 func (m Model) sidebarPaneIcon(currentPane *pane) string {
+	titleState := m.paneAgentTitleState(currentPane)
+	attention := m.paneAttention[currentPane.id]
+	if titleState == "attention" {
+		focused := m.currentPane()
+		attention = attention || m.appBlurred || focused == nil || focused != currentPane
+	}
 	return paneTypeStateIcon(
 		currentPane,
 		m.paneAgentKind(currentPane) != "",
-		m.paneBusy(currentPane),
+		m.paneBusyWithTitle(currentPane, titleState),
+		attention,
 		m.spinFrame,
 	)
 }
@@ -1890,13 +1941,15 @@ func paneIconCell(style lipgloss.Style, glyph string) string {
 	return style.Render(glyph)
 }
 
-func paneTypeStateIcon(currentPane *pane, agent, busy bool, frame int) string {
+func paneTypeStateIcon(currentPane *pane, agent, busy, attention bool, frame int) string {
 	runningGlyph, stoppedGlyph := "●", "○"
 	switch {
 	case currentPane.failure != "":
 		return paneIconCell(styleDotOff, stoppedGlyph)
 	case agent && busy:
 		return paneIconCell(styleDotBusy, spinnerFrames[frame%len(spinnerFrames)])
+	case currentPane.running && attention:
+		return paneIconCell(styleDotBusy, runningGlyph)
 	case currentPane.running:
 		return paneIconCell(styleDotOn, runningGlyph)
 	case currentPane.term == nil:
@@ -2653,6 +2706,7 @@ func (m *Model) selectSpace(delta int) {
 	if len(m.spaces) > 0 {
 		count := len(m.spaces)
 		m.selected = (m.selected + delta + count) % count
+		m.clearFocusedAttention()
 	}
 }
 
@@ -2664,6 +2718,7 @@ func (m *Model) selectTab(delta int) {
 	count := len(currentSpace.tabs)
 	currentSpace.active = (currentSpace.active + delta + count) % count
 	m.resizePanes(currentSpace)
+	m.clearFocusedAttention()
 }
 
 // cyclePane moves focus through the active tab's panes in layout order.
@@ -2694,6 +2749,7 @@ func (m *Model) cyclePane(delta int) {
 	for index, target := range currentTab.panes {
 		if target == next {
 			currentTab.selected = index
+			m.clearFocusedAttention()
 			return
 		}
 	}
@@ -2728,6 +2784,9 @@ func (m *Model) removePane(owner *space, target *pane) {
 		if index < 0 {
 			continue
 		}
+		delete(m.wasBusy, target.id)
+		delete(m.soundSeq, target.id)
+		delete(m.paneAttention, target.id)
 		if target.term != nil {
 			target.term.Close()
 		}
@@ -2741,6 +2800,7 @@ func (m *Model) removePane(owner *space, target *pane) {
 			m.closeTab(owner, currentTab)
 		}
 		m.resizePanes(owner)
+		m.clearFocusedAttention()
 		m.persist()
 		return
 	}
@@ -2748,6 +2808,9 @@ func (m *Model) removePane(owner *space, target *pane) {
 
 func (m *Model) closeTab(owner *space, target *tab) {
 	for _, currentPane := range target.panes {
+		delete(m.wasBusy, currentPane.id)
+		delete(m.soundSeq, currentPane.id)
+		delete(m.paneAttention, currentPane.id)
 		if currentPane.term != nil {
 			currentPane.term.Close()
 		}
@@ -2759,6 +2822,7 @@ func (m *Model) closeTab(owner *space, target *tab) {
 		}
 	}
 	owner.active = clampInt(owner.active, 0, max(0, len(owner.tabs)-1))
+	m.clearFocusedAttention()
 }
 
 func (m *Model) closeCurrentSpace() {
@@ -2767,6 +2831,9 @@ func (m *Model) closeCurrentSpace() {
 	}
 	for _, currentTab := range m.spaces[m.selected].tabs {
 		for _, currentPane := range currentTab.panes {
+			delete(m.wasBusy, currentPane.id)
+			delete(m.soundSeq, currentPane.id)
+			delete(m.paneAttention, currentPane.id)
 			if currentPane.term != nil {
 				currentPane.term.Close()
 			}
@@ -2776,6 +2843,7 @@ func (m *Model) closeCurrentSpace() {
 	if m.selected >= len(m.spaces) {
 		m.selected = max(0, len(m.spaces)-1)
 	}
+	m.clearFocusedAttention()
 	m.persist()
 }
 

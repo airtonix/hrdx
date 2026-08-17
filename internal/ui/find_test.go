@@ -26,6 +26,8 @@ func TestFuzzyMatch(t *testing.T) {
 
 func TestFindFiltersAndJumps(t *testing.T) {
 	model := newTestModel("/tmp/api", "/tmp/web")
+	target := model.spaces[1].tab().panes[0]
+	model.paneAttention[target.id] = true
 
 	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlB})
 	model = updated.(Model)
@@ -52,6 +54,9 @@ func TestFindFiltersAndJumps(t *testing.T) {
 	}
 	if model.mode != modeTerminal {
 		t.Fatalf("mode = %d, want modeTerminal after jump", model.mode)
+	}
+	if model.paneAttention[target.id] {
+		t.Fatal("find jump did not clear focused attention")
 	}
 }
 
