@@ -1978,6 +1978,21 @@ func (m Model) sidebarRows() []sidebarRow {
 		{label: " " + styleSection.Render("WORKSPACES")},
 		{},
 	}
+
+	// Reserve one shared tab-label column whenever any workspace has tabs.
+	// This keeps every pane icon aligned, including panes in workspaces that
+	// only have one tab. Named tabs widen the shared column for all rows.
+	tabNameWidth := 0
+	for _, currentSpace := range m.spaces {
+		if len(currentSpace.tabs) <= 1 {
+			continue
+		}
+		for tabIndex, currentTab := range currentSpace.tabs {
+			name := truncate(tabDisplayName(currentTab, tabIndex), 6)
+			tabNameWidth = max(tabNameWidth, lipgloss.Width(name))
+		}
+	}
+
 	for spaceIndex, currentSpace := range m.spaces {
 		if spaceIndex > 0 {
 			rows = append(rows, sidebarRow{
@@ -2018,33 +2033,26 @@ func (m Model) sidebarRows() []sidebarRow {
 		}
 
 		showTabs := len(currentSpace.tabs) > 1
-		tabNameWidth := 0
-		if showTabs {
-			for tabIndex, currentTab := range currentSpace.tabs {
-				name := truncate(tabDisplayName(currentTab, tabIndex), 6)
-				tabNameWidth = max(tabNameWidth, lipgloss.Width(name))
-			}
-		}
 		for tabIndex, currentTab := range currentSpace.tabs {
 			paneIndent := rail + "  "
-			paneNameWidth := sidebarWidth - 7
-			if showTabs {
-				paneIndent = rail + strings.Repeat(" ", tabNameWidth+4)
-				paneNameWidth = sidebarWidth - tabNameWidth - 9
+			paneNameWidth := sidebarWidth - 6
+			if tabNameWidth > 0 {
+				paneIndent = rail + strings.Repeat(" ", tabNameWidth+2)
+				paneNameWidth = sidebarWidth - tabNameWidth - 6
 			}
 
 			for paneIndex, currentPane := range currentTab.panes {
 				rowIndent := paneIndent
 				if showTabs && paneIndex == 0 {
 					tabStyle := stylePaneDim
-					tabMarker := "  "
+					tabMarker := " "
 					if spaceIndex == m.selected && tabIndex == currentSpace.active {
 						tabStyle = styleSpaceSel
-						tabMarker = styleSpaceSel.Render("▸") + " "
+						tabMarker = styleSpaceSel.Render("▸")
 					}
 					tabName := truncate(tabDisplayName(currentTab, tabIndex), 6)
 					tabPadding := strings.Repeat(" ", tabNameWidth-lipgloss.Width(tabName))
-					rowIndent = rail + " " + tabMarker + tabStyle.Render(tabName) + tabPadding + " "
+					rowIndent = rail + tabMarker + tabStyle.Render(tabName) + tabPadding + " "
 				}
 				selected := spaceIndex == m.selected &&
 					tabIndex == currentSpace.active &&
@@ -2065,7 +2073,7 @@ func (m Model) sidebarRows() []sidebarRow {
 				}
 				nameLabel := nameStyle.Render(name)
 				rows = append(rows, sidebarRow{
-					label: rowIndent + m.sidebarPaneIcon(currentPane) + " " + nameLabel + state,
+					label: rowIndent + m.sidebarPaneIcon(currentPane) + nameLabel + state,
 					kind:  "pane", space: spaceIndex, tab: tabIndex, pane: paneIndex,
 				})
 			}

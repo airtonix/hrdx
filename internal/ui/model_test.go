@@ -181,6 +181,30 @@ func TestInactiveWorkspaceDoesNotShowAnActiveTab(t *testing.T) {
 	}
 }
 
+func TestSidebarPaneIconsAlignAcrossTabbedAndUntabbedWorkspaces(t *testing.T) {
+	model := newTestModel("/tmp/api", "/tmp/web")
+	model.addTab(model.spaces[1], "shell")
+
+	columns := map[int]int{}
+	for _, row := range model.sidebarRows() {
+		if row.kind != "pane" {
+			continue
+		}
+		icon := strings.Index(row.label, "○")
+		if icon < 0 {
+			t.Fatalf("pane row has no starting icon: %q", row.label)
+		}
+		column := lipgloss.Width(row.label[:icon])
+		if previous, ok := columns[row.space]; ok && previous != column {
+			t.Fatalf("workspace %d icon columns differ: %d and %d", row.space, previous, column)
+		}
+		columns[row.space] = column
+	}
+	if columns[0] != columns[1] {
+		t.Fatalf("untabbed/tabbed icon columns = %d/%d, want equal", columns[0], columns[1])
+	}
+}
+
 func TestSidebarPaneRowsUseSharedShellAndAgentSymbols(t *testing.T) {
 	model := newTestModel("/tmp/api")
 	rows := model.sidebarRows()
