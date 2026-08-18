@@ -1,7 +1,9 @@
 package holder
 
 import (
+	"bufio"
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -164,6 +166,21 @@ func waitContains(t *testing.T, c *collector, needle string) {
 	}
 }
 
+// TestHolderEchoHelper is re-executed as a child process by
+// TestHolderSessionSurvivesDetach. Using the test binary itself avoids shell
+// startup, profile, quoting, and interactive-input differences across OSes.
+func TestHolderEchoHelper(t *testing.T) {
+	if os.Getenv("HRDX_HOLDER_ECHO_HELPER") != "1" {
+		return
+	}
+	fmt.Println("ready")
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		fmt.Println(scanner.Text())
+	}
+	os.Exit(0)
+}
+
 func TestHolderSessionSurvivesDetach(t *testing.T) {
 	socket := startTestHolder(t)
 
@@ -172,15 +189,26 @@ func TestHolderSessionSurvivesDetach(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := "echo ready; cat"
-	if runtime.GOOS == "windows" {
-		script = "Write-Output 'ready'; while ($true) { $l = [Console]::In.ReadLine(); if ($null -eq $l) { break }; Write-Output $l }"
-	}
-	path, args := testShell(script)
-	session, err := first.Start(path, args, t.TempDir(), testEnv(), 80, 24)
+	path, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
+	args := []string{"-test.run=^TestHolderEchoHelper$"}
+	env := append(os.Environ(), "HRDX_HOLDER_ECHO_HELPER=1")
+	session, err := first.Start(path, args, t.TempDir(), env, 80, 24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Register cleanup immediately so assertion failures still terminate the
+	// child before Windows tries to remove its working directory.
+	t.Cleanup(func() {
+		cleanup, connectErr := Connect(socket)
+		if connectErr != nil {
+			return
+		}
+		defer cleanup.Close()
+		_, _ = cleanup.call(request{Op: "kill", Session: session})
+	})
 	// Let the marker arrive before Attach. Output from a started but not yet
 	// subscribed session must be buffered rather than dropped.
 	time.Sleep(100 * time.Millisecond)
