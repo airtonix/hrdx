@@ -2037,18 +2037,18 @@ func (m Model) sidebarRows() []sidebarRow {
 			paneIndent := rail + "  "
 			paneNameWidth := sidebarWidth - 6
 			if tabNameWidth > 0 {
-				paneIndent = rail + strings.Repeat(" ", tabNameWidth+2)
-				paneNameWidth = sidebarWidth - tabNameWidth - 6
+				paneIndent = rail + strings.Repeat(" ", tabNameWidth+3)
+				paneNameWidth = sidebarWidth - tabNameWidth - 7
 			}
 
 			for paneIndex, currentPane := range currentTab.panes {
 				rowIndent := paneIndent
 				if showTabs && paneIndex == 0 {
 					tabStyle := stylePaneDim
-					tabMarker := " "
+					tabMarker := "  "
 					if spaceIndex == m.selected && tabIndex == currentSpace.active {
 						tabStyle = styleSpaceSel
-						tabMarker = styleSpaceSel.Render("▸")
+						tabMarker = styleSpaceSel.Render("▸") + " "
 					}
 					tabName := truncate(tabDisplayName(currentTab, tabIndex), 6)
 					tabPadding := strings.Repeat(" ", tabNameWidth-lipgloss.Width(tabName))
