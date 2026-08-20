@@ -114,6 +114,8 @@ func TestSidebarHitMapsHierarchyRows(t *testing.T) {
 	}
 	if hit = model.sidebarHit(9); hit.kind != "new" {
 		t.Fatalf("row 9 = %+v, want new workspace", hit)
+	} else if !strings.Contains(hit.label, "+  new workspace") {
+		t.Fatalf("row 9 label = %q, want two cells between icon and text", hit.label)
 	}
 
 	panes, tabs := 0, 0
@@ -294,6 +296,18 @@ func TestSidebarScrollClamps(t *testing.T) {
 	model.sideScroll = -5
 	if got := model.sidebarOffset(total); got != 0 {
 		t.Fatalf("offset = %d, want 0", got)
+	}
+}
+
+func TestSidebarOverflowMarkersUseIconSpacing(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	model.height = 6
+	if sidebar := model.renderSidebar(); !strings.Contains(sidebar, " ↓  more") {
+		t.Fatalf("sidebar missing aligned lower overflow marker: %q", sidebar)
+	}
+	model.sideScroll = 1
+	if sidebar := model.renderSidebar(); !strings.Contains(sidebar, " ↑  more") {
+		t.Fatalf("sidebar missing aligned upper overflow marker: %q", sidebar)
 	}
 }
 

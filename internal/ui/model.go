@@ -2082,7 +2082,7 @@ func (m Model) sidebarRows() []sidebarRow {
 
 	rows = append(rows,
 		sidebarRow{},
-		sidebarRow{label: " " + styleNewButton.Render("+ new workspace"), kind: "new", space: -1, tab: -1, pane: -1},
+		sidebarRow{label: " " + styleNewButton.Render("+  new workspace"), kind: "new", space: -1, tab: -1, pane: -1},
 	)
 	return rows
 }
@@ -2302,10 +2302,10 @@ func (m Model) renderSidebar() string {
 
 	// Overflow markers so hidden rows are discoverable.
 	if offset > 0 {
-		rows[0] = stylePaneDim.Render("↑ more")
+		rows[0] = stylePaneDim.Render(" ↑  more")
 	}
 	if offset < len(source)-list {
-		rows[list-1] = stylePaneDim.Render("↓ more")
+		rows[list-1] = stylePaneDim.Render(" ↓  more")
 	}
 	// Extra trailing space after the gear: unlike the other sidebar icons
 	// (●○↑↓), U+2699 is uncommon enough that some fonts (Windows
