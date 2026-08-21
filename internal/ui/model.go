@@ -1702,7 +1702,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			paneX := clampInt(localX-inner.x, 0, inner.w-1)
 			paneY := clampInt(localY-inner.y, 0, inner.h-1)
 			terminal := pr.pane.term
-			captures := terminal != nil && pr.pane.running && terminal.MouseEnabled()
+			captures := terminal != nil && pr.pane.running && terminal.MouseCapturing()
 
 			// Wheel: forward to capturing children, otherwise local scrollback.
 			if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {

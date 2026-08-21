@@ -212,6 +212,46 @@ func TestSynchronizedOutputStillNotifiesOuterRenderer(t *testing.T) {
 	}
 }
 
+type foregroundHost struct{ name string }
+
+func (h *foregroundHost) Write(int64, []byte)     {}
+func (h *foregroundHost) Resize(int64, int, int)  {}
+func (h *foregroundHost) Kill(int64)              {}
+func (h *foregroundHost) Foreground(int64) string { return h.name }
+
+func TestMouseCapturingRejectsStaleShellMode(t *testing.T) {
+	host := &foregroundHost{name: "zsh"}
+	pane := NewHolderPane(host, 1, 40, 6)
+	pane.Feed([]byte("\x1b[?1000h\x1b[?1006h"))
+	if !pane.MouseEnabled() {
+		t.Fatal("mouse mode was not enabled")
+	}
+	if pane.MouseCapturing() {
+		t.Fatal("stale mouse mode at a shell prompt must not capture")
+	}
+
+	host.name = "vim"
+	pane.mu.Lock()
+	pane.mouseFgCheckedAt = time.Time{}
+	pane.mu.Unlock()
+	if !pane.MouseCapturing() {
+		t.Fatal("mouse-enabled foreground TUI should capture")
+	}
+}
+
+func TestShellCommandNames(t *testing.T) {
+	for _, name := range []string{"zsh", "-bash", "fish", "pwsh.exe", "PowerShell.EXE"} {
+		if !isShellCommand(name) {
+			t.Errorf("isShellCommand(%q) = false", name)
+		}
+	}
+	for _, name := range []string{"vim", "zot", "", "shellcheck"} {
+		if isShellCommand(name) {
+			t.Errorf("isShellCommand(%q) = true", name)
+		}
+	}
+}
+
 func TestBracketedPasteMode(t *testing.T) {
 	script := "printf '\\033[?2004h'; sleep 5"
 	if runtime.GOOS == "windows" {

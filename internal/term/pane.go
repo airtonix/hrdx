@@ -40,9 +40,12 @@ type Pane struct {
 	kittyKeys    bool
 	scanTail     []byte
 
-	// Foreground process cache for ForegroundCommand.
-	fgName      string
-	fgCheckedAt time.Time
+	// Foreground process caches. Mouse capture uses its own short-lived
+	// cache so an exited TUI cannot leave mouse reporting active in a shell.
+	fgName           string
+	fgCheckedAt      time.Time
+	mouseFgName      string
+	mouseFgCheckedAt time.Time
 
 	// scrollOffset counts lines scrolled back into history; 0 is live.
 	scrollOffset int
@@ -496,6 +499,56 @@ func (p *Pane) MouseEnabled() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.vt.Mode()&vt.ModeMouseMask != 0
+}
+
+// MouseCapturing reports whether mouse events should be forwarded to the
+// foreground application. A TUI can crash or exit without disabling mouse
+// reporting, leaving the VT mode set after control returns to the shell. Check
+// the foreground process before forwarding so trackpad events do not become
+// visible SGR mouse sequences at the shell prompt.
+func (p *Pane) MouseCapturing() bool {
+	p.mu.Lock()
+	if p.exited || p.vt.Mode()&vt.ModeMouseMask == 0 {
+		p.mu.Unlock()
+		return false
+	}
+	if time.Since(p.mouseFgCheckedAt) < 250*time.Millisecond {
+		name := p.mouseFgName
+		p.mu.Unlock()
+		return name == "" || !isShellCommand(name)
+	}
+	host, session := p.host, p.session
+	local := p.pty
+	var rootPID int
+	if host == nil && p.cmd != nil && p.cmd.Process != nil {
+		rootPID = p.cmd.Process.Pid
+	}
+	p.mu.Unlock()
+
+	name := ""
+	if host != nil {
+		name = host.Foreground(session)
+	} else if local != nil {
+		name = foregroundName(local, rootPID)
+	}
+
+	p.mu.Lock()
+	p.mouseFgName = name
+	p.mouseFgCheckedAt = time.Now()
+	p.mu.Unlock()
+	return name == "" || !isShellCommand(name)
+}
+
+func isShellCommand(name string) bool {
+	name = strings.ToLower(strings.TrimPrefix(name, "-"))
+	name = strings.TrimSuffix(name, ".exe")
+	switch name {
+	case "sh", "bash", "dash", "zsh", "fish", "ksh", "tcsh", "csh", "ash",
+		"nu", "nushell", "elvish", "xonsh", "cmd", "command", "powershell", "pwsh":
+		return true
+	default:
+		return false
+	}
 }
 
 // AltScreen reports whether the child runs a full-screen app.
