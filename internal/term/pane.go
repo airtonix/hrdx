@@ -29,19 +29,20 @@ type SessionHost interface {
 // is either owned locally (pty/cmd) or lives in the session holder
 // (host/session), in which case output arrives via Feed.
 type Pane struct {
-	mu              sync.Mutex
-	vt              vt.Terminal
-	pty             pty.Pty
-	ptyCloseOnce    sync.Once
-	cmd             *pty.Cmd
-	host            SessionHost
-	session         int64
-	updates         chan struct{}
-	exited          bool
-	keyboardMode    [2]keyboardProtocolMode // shell and full-screen app views
-	keyboardAlt     bool
-	modifyOtherKeys bool // xterm fallback shared by both views
-	scanTail        []byte
+	mu                  sync.Mutex
+	vt                  vt.Terminal
+	pty                 pty.Pty
+	ptyCloseOnce        sync.Once
+	cmd                 *pty.Cmd
+	host                SessionHost
+	session             int64
+	updates             chan struct{}
+	exited              bool
+	keyboardMode        [2]keyboardProtocolMode // shell and full-screen app views
+	keyboardAlt         bool
+	modifyOtherKeys     bool // active xterm fallback setting
+	modifyOtherKeysMain bool // main-screen setting saved while alt screen is active
+	scanTail            []byte
 
 	// Foreground process caches. Mouse capture uses its own short-lived
 	// cache so an exited TUI cannot leave mouse reporting active in a shell.
@@ -343,6 +344,7 @@ func (p *Pane) resetKeyboardProtocol() {
 	p.keyboardMode = [2]keyboardProtocolMode{}
 	p.keyboardAlt = false
 	p.modifyOtherKeys = false
+	p.modifyOtherKeysMain = false
 }
 
 func parseKeyboardParams(body []byte) ([]int, bool) {
@@ -370,9 +372,23 @@ func (p *Pane) applyKeyboardCSI(body []byte, final byte) {
 	if (final == 'h' || final == 'l') && len(body) > 1 && body[0] == '?' {
 		for _, field := range strings.Split(string(body[1:]), ";") {
 			value, err := strconv.Atoi(field)
-			if err == nil && (value == 47 || value == 1047 || value == 1049) {
-				p.keyboardAlt = final == 'h'
+			if err != nil || (value != 47 && value != 1047 && value != 1049) {
+				continue
 			}
+			alt := final == 'h'
+			if alt == p.keyboardAlt {
+				continue
+			}
+			if alt {
+				// modifyOtherKeys is global in xterm, so the alternate screen
+				// inherits it. Save the shell's value before the child changes it.
+				p.modifyOtherKeysMain = p.modifyOtherKeys
+			} else {
+				// A full-screen child may exit without resetting the global xterm
+				// fallback. Restore the value that belonged to the shell.
+				p.modifyOtherKeys = p.modifyOtherKeysMain
+			}
+			p.keyboardAlt = alt
 		}
 		return
 	}

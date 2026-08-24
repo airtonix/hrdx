@@ -29,18 +29,18 @@ func TestCSIUControlsReturnToLegacyEncodingAfterChildExitsAltScreen(t *testing.T
 	target.term = term.NewHolderPane(host, 1, 80, 24)
 	target.running = true
 
-	// While the full-screen child is active, its kitty request makes CSI-u the
-	// correct encoding to pass through.
-	target.term.Feed([]byte("\x1b[?1049h\x1b[>1u"))
+	// While the full-screen child is active, its kitty request and xterm
+	// fallback make CSI-u the correct encoding to pass through.
+	target.term.Feed([]byte("\x1b[?1049h\x1b[>1u\x1b[>4;2m"))
 	childInput := []byte("\x1b[97;5u") // ctrl+a
 	model.updateRaw(childInput)
 	if !bytes.Equal(host.input, childInput) {
 		t.Fatalf("input while child active = %q, want CSI-u %q", host.input, childInput)
 	}
 
-	// The child returns to the shell without a kitty pop. The alternate screen
-	// switch still restores the shell's independent keyboard-protocol state, so
-	// common line-editing controls must be translated back to classic bytes.
+	// The child returns to the shell without a kitty pop or xterm fallback
+	// reset. The alternate screen switch still restores the shell's keyboard
+	// state, so common line-editing controls return to classic bytes.
 	host.input = nil
 	target.term.Feed([]byte("\x1b[?1049l"))
 	for _, input := range [][]byte{

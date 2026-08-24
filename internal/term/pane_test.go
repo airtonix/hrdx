@@ -303,20 +303,32 @@ func TestKittyKeyboardViewsKeepIndependentModes(t *testing.T) {
 	}
 }
 
-func TestModifyOtherKeysIsSharedAcrossViews(t *testing.T) {
+func TestModifyOtherKeysMainModeIsInheritedByAltScreen(t *testing.T) {
 	pane := NewHolderPane(nil, 1, 40, 6)
 	pane.Feed([]byte("\x1b[>4;2m"))
 	pane.Feed([]byte("\x1b[?1049h"))
 	if !pane.KittyKeys() {
 		t.Fatal("modifyOtherKeys was lost on entry to the full-screen view")
 	}
-	pane.Feed([]byte("\x1b[?1049l"))
-	if !pane.KittyKeys() {
-		t.Fatal("modifyOtherKeys was lost on return to the shell view")
-	}
 	pane.Feed([]byte("\x1b[>4m"))
 	if pane.KittyKeys() {
-		t.Fatal("modifyOtherKeys remained enabled after its reset")
+		t.Fatal("alternate-screen modifyOtherKeys reset was not detected")
+	}
+	pane.Feed([]byte("\x1b[?1049l"))
+	if !pane.KittyKeys() {
+		t.Fatal("returning to the shell did not restore its modifyOtherKeys mode")
+	}
+}
+
+func TestModifyOtherKeysDoesNotLeakOutOfAltScreen(t *testing.T) {
+	pane := NewHolderPane(nil, 1, 40, 6)
+	pane.Feed([]byte("\x1b[?1049h\x1b[>4;2m"))
+	if !pane.KittyKeys() {
+		t.Fatal("alternate-screen modifyOtherKeys mode was not detected")
+	}
+	pane.Feed([]byte("\x1b[?1049l"))
+	if pane.KittyKeys() {
+		t.Fatal("modifyOtherKeys leaked from the exited child into the shell")
 	}
 }
 
