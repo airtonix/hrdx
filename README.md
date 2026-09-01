@@ -253,7 +253,9 @@ Every request is answered by the TUI's own update loop, so the API always sees e
 
 ## Themes
 
-hrdx themes are JSON files that override any subset of the built-in colors; missing values inherit the default look. Drop them into a `themes/` directory next to the state file (`~/Library/Application Support/hrdx/themes/` on macOS, `$XDG_CONFIG_HOME/hrdx/themes/` on Linux, `%AppData%\hrdx\themes\` on Windows) and pick them in the settings window's theme section. The change applies immediately and persists.
+hrdx includes a collection of selectable themes such as Dracula, Gruvbox, Tokyo Night, Catppuccin, Solarized, Matrix, and the original default. Pick one in the settings window's theme section; long lists scroll with the arrow keys or mouse wheel. The change applies immediately and persists.
+
+Custom themes are JSON files that override any subset of the default colors; missing values inherit the original look. Drop them into a `themes/` directory next to the state file (`~/Library/Application Support/hrdx/themes/` on macOS, `$XDG_CONFIG_HOME/hrdx/themes/` on Linux, `%AppData%\hrdx\themes\` on Windows). Custom theme names must not collide with a bundled theme.
 
 ```json
 {

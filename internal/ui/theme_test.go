@@ -38,7 +38,7 @@ func TestLoadThemesAndApply(t *testing.T) {
 		t.Fatalf("loadThemes = %q", problem)
 	}
 	names := themeNames()
-	if len(names) != 2 || names[0] != defaultThemeName || names[1] != "neon" {
+	if len(names) != len(builtInThemePresets)+2 || names[0] != defaultThemeName || names[len(names)-1] != "neon" {
 		t.Fatalf("themes = %v", names)
 	}
 
@@ -65,6 +65,7 @@ func TestLoadThemesValidation(t *testing.T) {
 	dir := t.TempDir()
 	writeTheme(t, dir, "broken.json", `{not json`)
 	writeTheme(t, dir, "reserved.json", `{"name": "default"}`)
+	writeTheme(t, dir, "bundled.json", `{"name": "dracula"}`)
 	writeTheme(t, dir, "unnamed.json", `{"colors": {"accent": 100}}`)
 
 	problem := loadThemes(dir)
@@ -82,8 +83,17 @@ func TestThemesMissingDirIsFine(t *testing.T) {
 	if problem := loadThemes(t.TempDir()); problem != "" {
 		t.Fatalf("missing themes dir reported %q", problem)
 	}
-	if len(themeNames()) != 1 {
-		t.Fatalf("themes = %v, want only default", themeNames())
+	if len(themeNames()) != len(builtInThemePresets)+1 {
+		t.Fatalf("themes = %v, want default and bundled presets", themeNames())
+	}
+}
+
+func TestApplyBuiltInTheme(t *testing.T) {
+	defer resetThemes()
+	applyTheme("dracula")
+	if colorAccent != lipgloss.Color("#bd93f9") || colorGood != lipgloss.Color("#50fa7b") ||
+		colorBarBg != lipgloss.Color("#343746") || colorInk != lipgloss.Color("#282a36") {
+		t.Fatalf("dracula palette = accent %q good %q bar_bg %q ink %q", colorAccent, colorGood, colorBarBg, colorInk)
 	}
 }
 

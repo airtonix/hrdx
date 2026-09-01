@@ -145,16 +145,28 @@ func (m Model) settingsBox() rect {
 	}
 	m.settingsTab = tab
 	width += 6 // border + padding
-	// top border, tabs, separator, rows, blank, hint, bottom border
-	height := rowCount + 6
-
 	bodyW := max(1, m.width)
 	bodyH := max(1, m.height-2)
+	// top border, tabs, separator, rows, blank, hint, bottom border. Long
+	// sections scroll within the available body instead of leaving the screen.
+	height := min(rowCount+6, bodyH)
 	return rect{
 		x: clampInt((bodyW-width)/2, 0, max(0, bodyW-width)),
 		y: clampInt((bodyH-height)/2, 0, max(0, bodyH-height)),
 		w: width, h: height,
 	}
+}
+
+// visibleSettingsRows returns the rows that fit in the settings box and the
+// index of the first one. The selected row is always kept in view.
+func (m Model) visibleSettingsRows(box rect) ([]settingsRow, int) {
+	rows := m.settingsRows()
+	limit := max(1, box.h-6)
+	if len(rows) <= limit {
+		return rows, 0
+	}
+	offset := clampInt(m.settingsIndex-limit+1, 0, len(rows)-limit)
+	return rows[offset : offset+limit], offset
 }
 
 // settingsTabCells returns the clickable x ranges of the tab labels,
@@ -203,12 +215,22 @@ func (m Model) updateSettingsMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	box := m.settingsBox()
 	bodyX, bodyY := msg.X, msg.Y-1
 	rows := m.settingsRows()
+	visible, offset := m.visibleSettingsRows(box)
+
+	if box.hit(bodyX, bodyY) && (msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown) {
+		delta := -1
+		if msg.Button == tea.MouseButtonWheelDown {
+			delta = 1
+		}
+		m.settingsIndex = clampInt(m.settingsIndex+delta, 0, len(rows)-1)
+		return m, nil
+	}
 
 	// Hovering highlights rows, like the context menu.
 	if msg.Action == tea.MouseActionMotion && box.hit(bodyX, bodyY) {
 		index := bodyY - box.y - 3
-		if index >= 0 && index < len(rows) {
-			m.settingsIndex = index
+		if index >= 0 && index < len(visible) {
+			m.settingsIndex = offset + index
 		}
 		return m, nil
 	}
@@ -235,9 +257,9 @@ func (m Model) updateSettingsMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 	// Content rows.
 	index := bodyY - box.y - 3
-	if index >= 0 && index < len(rows) {
-		m.settingsIndex = index
-		return m, m.toggleSettingsRow(rows[index])
+	if index >= 0 && index < len(visible) {
+		m.settingsIndex = offset + index
+		return m, m.toggleSettingsRow(rows[m.settingsIndex])
 	}
 	return m, nil
 }
@@ -275,14 +297,14 @@ func (m Model) overlaySettings(bodyRows []string) {
 	}
 	tabs.WriteString(fill.Render(strings.Repeat(" ", max(0, innerW-used))))
 
-	rows := m.settingsRows()
+	rows, offset := m.visibleSettingsRows(box)
 	lines := make([]string, 0, box.h)
 	lines = append(lines, border.Render(top))
 	lines = append(lines, border.Render("│")+tabs.String()+border.Render("│"))
 	lines = append(lines, border.Render("│")+faint.Render(" "+strings.Repeat("─", max(0, innerW-2))+" ")+border.Render("│"))
 	for index, row := range rows {
 		style := normal
-		if index == m.settingsIndex {
+		if offset+index == m.settingsIndex {
 			style = active
 		}
 		lines = append(lines, border.Render("│")+style.Render(pad("  "+row.label, lipgloss.Width(row.label)+2))+border.Render("│"))

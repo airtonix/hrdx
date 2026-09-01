@@ -47,6 +47,28 @@ func TestSettingsOpenToggleClose(t *testing.T) {
 	}
 }
 
+func TestThemeSettingsScrollAndSelectBundledPreset(t *testing.T) {
+	defer resetThemes()
+	model := newTestModel("/tmp/api")
+	model.height = 20
+	model.settingsTab = 2
+	rows := model.settingsRows()
+	if len(rows) <= model.height {
+		t.Fatalf("theme rows = %d, want a scrollable section", len(rows))
+	}
+	model.settingsIndex = len(rows) - 1
+	box := model.settingsBox()
+	visible, offset := model.visibleSettingsRows(box)
+	if box.h > model.height-2 || offset+len(visible) != len(rows) {
+		t.Fatalf("box=%+v visible=%d offset=%d rows=%d", box, len(visible), offset, len(rows))
+	}
+
+	model.toggleSettingsRow(rows[model.settingsIndex])
+	if model.themeName != "coffee" || colorAccent != "#d8a657" {
+		t.Fatalf("selected theme = %q accent = %q", model.themeName, colorAccent)
+	}
+}
+
 func TestSettingsMouseOutsideCloses(t *testing.T) {
 	model := newTestModel("/tmp/api")
 	model.openSettings()

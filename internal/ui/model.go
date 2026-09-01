@@ -159,7 +159,7 @@ type Model struct {
 	soundOn       bool            // play a sound when an agent finishes a turn
 	soundKind     string          // which sound: "ding" or a sounds.json entry
 	notifyOn      bool            // post a desktop notification on finish
-	themeName     string          // active color theme, "default" or a themes/ file
+	themeName     string          // active bundled or user theme name
 	wasBusy       map[int]bool    // pane id -> spinner seen, for finish notifications
 	soundSeq      map[int]uint64  // invalidates stale agent-finish confirmations
 	paneAttention map[int]bool    // completed while unfocused; cleared only by focus

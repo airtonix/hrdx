@@ -39,7 +39,7 @@ type themeFile struct {
 	Colors      themeColors `json:"colors,omitempty"`
 }
 
-// defaultThemeName identifies the built-in theme.
+// defaultThemeName identifies the original built-in theme.
 const defaultThemeName = "default"
 
 // themeRegistry holds the discovered user themes.
@@ -77,8 +77,8 @@ func loadThemes(dir string) string {
 		if name == "" {
 			name = strings.TrimSuffix(filepath.Base(path), ".json")
 		}
-		if name == defaultThemeName {
-			problems = append(problems, filepath.Base(path)+": name 'default' is reserved")
+		if isBuiltInTheme(name) {
+			problems = append(problems, filepath.Base(path)+": name '"+name+"' is reserved")
 			continue
 		}
 		loaded.Name = name
@@ -90,12 +90,15 @@ func loadThemes(dir string) string {
 	return ""
 }
 
-// themeNames returns the selectable themes: default first, then user
-// themes alphabetically.
+// themeNames returns the selectable themes: the original default, bundled
+// presets in their curated order, then user themes alphabetically.
 func themeNames() []string {
 	themeRegistry.Lock()
 	defer themeRegistry.Unlock()
 	names := []string{defaultThemeName}
+	for _, preset := range builtInThemePresets {
+		names = append(names, preset.name)
+	}
 	var user []string
 	for name := range themeRegistry.themes {
 		user = append(user, name)
@@ -107,6 +110,18 @@ func themeNames() []string {
 func isThemeName(name string) bool {
 	for _, current := range themeNames() {
 		if current == name {
+			return true
+		}
+	}
+	return false
+}
+
+func isBuiltInTheme(name string) bool {
+	if name == defaultThemeName {
+		return true
+	}
+	for _, preset := range builtInThemePresets {
+		if preset.name == name {
 			return true
 		}
 	}
@@ -156,7 +171,11 @@ func defaultColors() map[string]lipgloss.Color {
 // theme's overrides on top. Unknown names fall back to the default.
 func applyTheme(name string) {
 	palette := defaultColors()
-	if name != defaultThemeName {
+	if preset, ok := builtInTheme(name); ok {
+		for key, color := range preset.colors {
+			palette[key] = color
+		}
+	} else if name != defaultThemeName {
 		themeRegistry.Lock()
 		loaded, ok := themeRegistry.themes[name]
 		themeRegistry.Unlock()
