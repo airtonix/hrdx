@@ -80,6 +80,14 @@ type AgentWait struct {
 	TimeoutMS int    `json:"timeout_ms,omitempty"`
 }
 
+// MenuRegister adds an ephemeral entry to one context menu. Registrations
+// live until hrdx exits; registering an existing action id replaces it.
+type MenuRegister struct {
+	Target   string `json:"target"` // "pane", "tab", or "sidebar"
+	Label    string `json:"label"`
+	ActionID string `json:"action_id"`
+}
+
 // PaneStatus describes one pane in a status reply.
 type PaneStatus struct {
 	ID      int    `json:"pane_id"`
@@ -126,6 +134,7 @@ const (
 	EventPaneCreated      = "pane.created"
 	EventPaneClosed       = "pane.closed"
 	EventPaneBusyChanged  = "pane.busy_changed"
+	EventMenuAction       = "menu.action"
 )
 
 // PaneEvent is the data of pane lifecycle and busy events.
@@ -141,6 +150,18 @@ type PaneEvent struct {
 type WorkspaceEvent struct {
 	Workspace string `json:"workspace"`
 	Path      string `json:"path,omitempty"`
+}
+
+// MenuActionEvent identifies a selected custom menu action and the UI
+// context in which it was selected. TabIndex is present for tab and pane
+// targets, including index zero.
+type MenuActionEvent struct {
+	ActionID  string `json:"action_id"`
+	Target    string `json:"target"`
+	Pane      int    `json:"pane_id,omitempty"`
+	Workspace string `json:"workspace,omitempty"`
+	Path      string `json:"path,omitempty"`
+	TabIndex  *int   `json:"tab_index,omitempty"`
 }
 
 // Broadcaster fans events out to subscribers. Publish never blocks:

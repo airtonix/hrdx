@@ -223,6 +223,7 @@ echo '{"id": "3", "method": "pane.create", "params": {"workspace": "api", "kind"
 echo '{"id": "4", "method": "pane.send_text", "params": {"pane_id": 3, "text": "run the tests", "enter": true}}' | nc -U "$SOCK"
 echo '{"id": "5", "method": "pane.wait", "params": {"pane_id": 3, "until": "idle"}}' | nc -U "$SOCK"
 echo '{"id": "6", "method": "pane.read", "params": {"pane_id": 3}}' | nc -U "$SOCK"
+echo '{"id": "7", "method": "menu.register", "params": {"target": "pane", "label": "Run linter", "action_id": "custom.run_linter"}}' | nc -U "$SOCK"
 ```
 
 | Method | Effect |
@@ -236,11 +237,14 @@ echo '{"id": "6", "method": "pane.read", "params": {"pane_id": 3}}' | nc -U "$SO
 | `pane.read` | The pane's visible screen as plain text |
 | `pane.wait` | Block until a pane's agent is `idle` or `busy` (`until`, optional `timeout_ms`) |
 | `pane.close` | Close a pane by id |
+| `menu.register` | Add a process-local context-menu entry (`target`: `pane`, `tab`, `sidebar`; `label`; unique `action_id`) |
 | `events.subscribe` | Keep the connection open and push events |
 
 Successful responses are `{"id": "...", "result": {...}}`; failures are `{"id": "...", "error": {"code": "not_found", "message": "..."}}` with codes `not_found`, `invalid_params`, `unknown_method`, `timeout`, and `error`.
 
-After `events.subscribe` the connection stays open and hrdx pushes lines like `{"event": "pane.busy_changed", "data": {"pane_id": 3, "busy": false}}`. Events: `workspace.created`, `workspace.closed`, `pane.created`, `pane.closed`, and `pane.busy_changed`, so a script can react the moment an agent finishes instead of polling.
+After `events.subscribe` the connection stays open and hrdx pushes lines like `{"event": "pane.busy_changed", "data": {"pane_id": 3, "busy": false}}`. Events: `workspace.created`, `workspace.closed`, `pane.created`, `pane.closed`, `pane.busy_changed`, and `menu.action`, so a script can react the moment an agent finishes instead of polling.
+
+A `menu.register` entry appears after the built-in actions in the requested context menu. Selecting it publishes `{"event":"menu.action","data":{"action_id":"custom.run_linter","target":"pane","pane_id":3,"workspace":"api","path":"/path/to/api","tab_index":0}}`. Registrations are ephemeral, re-registering an `action_id` replaces it, and events use the API's existing best-effort delivery for slow subscribers.
 
 Every request is answered by the TUI's own update loop, so the API always sees exactly what is on screen. `pane.wait` plus `pane.send_text` is enough to build simple agent pipelines: prompt an agent, wait until it is idle, read the screen, move on.
 

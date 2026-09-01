@@ -79,7 +79,7 @@ func TestServerRoutesMethods(t *testing.T) {
 	socket, _ := echoServer(t, nil)
 	for _, method := range []string{
 		"status", "workspace.create", "workspace.close",
-		"pane.create", "pane.send_text", "pane.read",
+		"pane.create", "pane.send_text", "pane.read", "menu.register",
 	} {
 		line := `{"id": "r", "method": "` + method + `", "params": {}}`
 		response := call(t, socket, line)

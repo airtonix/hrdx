@@ -140,10 +140,11 @@ type Model struct {
 	menuSpace     *space
 	menuAt        rect // menu box in body coordinates
 	menuIndex     int
-	pickItems     []menuItem // kind picker entries while it is open
-	pickAction    string     // "space", "tab", "split-right", "split-down", "settings"
-	pickSpace     *space     // tab target for the picker
-	pickPath      string     // directory for a pending new workspace
+	customMenus   []api.MenuRegister // ephemeral socket API context-menu entries
+	pickItems     []menuItem         // kind picker entries while it is open
+	pickAction    string             // "space", "tab", "split-right", "split-down", "settings"
+	pickSpace     *space             // tab target for the picker
+	pickPath      string             // directory for a pending new workspace
 	renamePane    *pane
 	renameTab     *tab
 	renameSpace   *space
@@ -237,21 +238,30 @@ func (m Model) menuItems() []menuItem {
 	if m.pickAction != "" {
 		return m.pickItems
 	}
+	target := "pane"
+	builtins := paneMenuItems
 	if m.menuSpace != nil {
-		return spaceMenuItems
-	}
-	if m.menuTab != nil {
+		target = "sidebar"
+		builtins = spaceMenuItems
+	} else if m.menuTab != nil {
+		target = "tab"
+		builtins = tabMenuItems
 		if owner := m.spaceByTab(m.menuTab); owner != nil && len(owner.tabs) == 1 {
-			return tabMenuItems[:len(tabMenuItems)-1]
+			builtins = tabMenuItems[:len(tabMenuItems)-1]
 		}
-		return tabMenuItems
-	}
-	if m.menuPane != nil {
+	} else if m.menuPane != nil {
 		if owner := m.tabByPaneID(m.menuPane.id); owner != nil && len(owner.panes) == 1 {
-			return paneMenuItems[:len(paneMenuItems)-1]
+			builtins = paneMenuItems[:len(paneMenuItems)-1]
 		}
 	}
-	return paneMenuItems
+
+	items := append([]menuItem{}, builtins...)
+	for _, registration := range m.customMenus {
+		if registration.Target == target {
+			items = append(items, menuItem{registration.Label, "custom:" + registration.ActionID})
+		}
+	}
+	return items
 }
 
 func (m Model) spaceByTab(target *tab) *space {
@@ -1450,6 +1460,11 @@ func (m Model) runMenuAction(action string) (tea.Model, tea.Cmd) {
 	targetSpace := m.menuSpace
 	at := m.menuAt
 	m.closeMenu()
+
+	if actionID, ok := strings.CutPrefix(action, "custom:"); ok {
+		m.publishMenuAction(actionID, targetPane, targetTab, targetSpace)
+		return m, nil
+	}
 
 	if targetSpace != nil {
 		for index, currentSpace := range m.spaces {

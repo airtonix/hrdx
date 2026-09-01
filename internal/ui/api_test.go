@@ -190,3 +190,113 @@ func TestAPIBusyEventsPublished(t *testing.T) {
 		t.Fatal("no busy event published")
 	}
 }
+
+func TestAPIMenuRegisterAndAction(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	events := api.NewBroadcaster()
+	model.SetEventBroadcaster(events)
+	_, channel := events.Subscribe()
+
+	registration := api.MenuRegister{Target: "pane", Label: "Run linter", ActionID: "custom.run_linter"}
+	answer := apiCall(t, &model, "menu.register", registration)
+	if answer.Err != "" {
+		t.Fatalf("menu.register error: %s", answer.Err)
+	}
+
+	target := model.currentPane()
+	model.openMenu(target, rect{x: 2, y: 1})
+	items := model.menuItems()
+	if got := items[len(items)-1]; got.label != registration.Label || got.action != "custom:"+registration.ActionID {
+		t.Fatalf("custom menu item = %+v", got)
+	}
+	updated, _ := model.runMenuAction("custom:" + registration.ActionID)
+	model = updated.(Model)
+
+	select {
+	case event := <-channel:
+		if event.Event != api.EventMenuAction {
+			t.Fatalf("event = %q, want menu.action", event.Event)
+		}
+		data, ok := event.Data.(api.MenuActionEvent)
+		if !ok || data.ActionID != registration.ActionID || data.Target != "pane" || data.Pane != target.id ||
+			data.Workspace != "api" || data.Path != "/tmp/api" || data.TabIndex == nil || *data.TabIndex != 0 {
+			t.Fatalf("event data = %+v", event.Data)
+		}
+	default:
+		t.Fatal("no menu.action event published")
+	}
+}
+
+func TestAPIMenuActionContexts(t *testing.T) {
+	for _, test := range []struct {
+		target string
+		open   func(*Model)
+	}{
+		{target: "tab", open: func(model *Model) {
+			model.openTabMenu(model.currentSpace().tab(), rect{x: 2, y: 1})
+		}},
+		{target: "sidebar", open: func(model *Model) {
+			model.openSpaceMenu(model.currentSpace(), rect{x: 2, y: 1})
+		}},
+	} {
+		t.Run(test.target, func(t *testing.T) {
+			model := newTestModel("/tmp/api")
+			events := api.NewBroadcaster()
+			model.SetEventBroadcaster(events)
+			_, channel := events.Subscribe()
+			registration := api.MenuRegister{Target: test.target, Label: "External action", ActionID: "custom." + test.target}
+			if answer := apiCall(t, &model, "menu.register", registration); answer.Err != "" {
+				t.Fatal(answer.Err)
+			}
+			test.open(&model)
+			items := model.menuItems()
+			if got := items[len(items)-1].action; got != "custom:"+registration.ActionID {
+				t.Fatalf("last menu action = %q", got)
+			}
+			model.runMenuAction("custom:" + registration.ActionID)
+
+			select {
+			case event := <-channel:
+				data, ok := event.Data.(api.MenuActionEvent)
+				if event.Event != api.EventMenuAction || !ok || data.Target != test.target ||
+					data.Workspace != "api" || data.Path != "/tmp/api" {
+					t.Fatalf("event = %+v", event)
+				}
+				if test.target == "tab" && (data.TabIndex == nil || *data.TabIndex != 0) {
+					t.Fatalf("tab index = %v, want 0", data.TabIndex)
+				}
+				if test.target == "sidebar" && data.TabIndex != nil {
+					t.Fatalf("sidebar event has tab index %v", *data.TabIndex)
+				}
+			default:
+				t.Fatal("no menu.action event published")
+			}
+		})
+	}
+}
+
+func TestAPIMenuRegisterValidationAndReplacement(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	for _, registration := range []api.MenuRegister{
+		{Target: "workspace", Label: "Bad target", ActionID: "bad.target"},
+		{Target: "pane", Label: "line\nbreak", ActionID: "bad.label"},
+		{Target: "pane", Label: "Missing id"},
+	} {
+		answer := apiCall(t, &model, "menu.register", registration)
+		if answer.Code != api.CodeInvalidParams {
+			t.Fatalf("registration %+v = %q, want invalid_params", registration, answer.Code)
+		}
+	}
+
+	first := api.MenuRegister{Target: "pane", Label: "First", ActionID: "same"}
+	second := api.MenuRegister{Target: "tab", Label: "Second", ActionID: "same"}
+	if answer := apiCall(t, &model, "menu.register", first); answer.Err != "" {
+		t.Fatal(answer.Err)
+	}
+	if answer := apiCall(t, &model, "menu.register", second); answer.Err != "" {
+		t.Fatal(answer.Err)
+	}
+	if len(model.customMenus) != 1 || model.customMenus[0] != second {
+		t.Fatalf("registrations = %+v, want replacement %+v", model.customMenus, second)
+	}
+}

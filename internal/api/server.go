@@ -170,6 +170,12 @@ func (s *Server) dispatch(request wireRequest) wireResponse {
 			return fail(CodeInvalidParams, err.Error())
 		}
 		payload = params
+	case "menu.register":
+		var params MenuRegister
+		if err := decodeParams(request.Params, &params); err != nil {
+			return fail(CodeInvalidParams, err.Error())
+		}
+		payload = params
 	case "pane.wait":
 		var params AgentWait
 		if err := decodeParams(request.Params, &params); err != nil {
