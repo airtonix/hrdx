@@ -56,9 +56,12 @@ type WorkspaceRef struct {
 
 // PaneCreate adds a pane to a workspace.
 type PaneCreate struct {
-	Workspace string `json:"workspace,omitempty"` // name or path; empty: selected workspace
-	Kind      string `json:"kind,omitempty"`      // agent kind or "shell"; empty: default agent
-	Split     string `json:"split,omitempty"`     // "right" (default), "down", "tab"
+	Workspace string `json:"workspace,omitempty"`  // name or path; empty: selected workspace
+	Kind      string `json:"kind,omitempty"`       // agent kind or "shell"; empty: default agent
+	Split     string `json:"split,omitempty"`      // "right" (default), "down", "tab", "float"
+	Anchor    string `json:"anchor,omitempty"`     // float only: center (default), top, bottom, left, right
+	WidthPct  *int   `json:"width_pct,omitempty"`  // required for float, percentage of the pane area
+	HeightPct *int   `json:"height_pct,omitempty"` // required for float, percentage of the pane area
 }
 
 // PaneRef targets a pane by id.
@@ -90,12 +93,16 @@ type MenuRegister struct {
 
 // PaneStatus describes one pane in a status reply.
 type PaneStatus struct {
-	ID      int    `json:"pane_id"`
-	Name    string `json:"name"`
-	Kind    string `json:"kind"`
-	Running bool   `json:"running"`
-	Busy    bool   `json:"busy"`
-	Failure string `json:"failure,omitempty"`
+	ID        int    `json:"pane_id"`
+	Name      string `json:"name"`
+	Kind      string `json:"kind"`
+	Running   bool   `json:"running"`
+	Busy      bool   `json:"busy"`
+	Failure   string `json:"failure,omitempty"`
+	Floating  bool   `json:"floating,omitempty"`
+	Anchor    string `json:"anchor,omitempty"`
+	WidthPct  int    `json:"width_pct,omitempty"`
+	HeightPct int    `json:"height_pct,omitempty"`
 }
 
 // TabStatus describes one tab in a status reply.

@@ -48,6 +48,25 @@ func TestSnapshotRestoreRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSnapshotExcludesFloatingPanes(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	currentSpace := model.spaces[0]
+	model.addPane(currentSpace, "shell", true)
+	floating := model.addFloatingPane(currentSpace, "shell", "center", 40, 30)
+	if model.currentPane() != floating {
+		t.Fatal("new floating pane should be focused")
+	}
+
+	saved := model.snapshot()
+	tab := saved.Workspaces[0].Tabs[0]
+	if len(tab.Panes) != 2 {
+		t.Fatalf("saved panes = %d, want only 2 split panes", len(tab.Panes))
+	}
+	if tab.Layout == nil {
+		t.Fatal("split layout should still be persisted")
+	}
+}
+
 func TestRestoreLegacyStateWithoutTabs(t *testing.T) {
 	legacy := state.State{Workspaces: []state.Workspace{{
 		Name:  "api",

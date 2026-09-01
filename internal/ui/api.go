@@ -267,14 +267,21 @@ func (m *Model) apiStatus() api.Status {
 				Active: tabIndex == currentSpace.active,
 			}
 			for _, currentPane := range currentTab.panes {
-				tabStatus.Panes = append(tabStatus.Panes, api.PaneStatus{
+				paneStatus := api.PaneStatus{
 					ID:      currentPane.id,
 					Name:    currentPane.name,
 					Kind:    currentPane.kind,
 					Running: currentPane.running,
 					Busy:    m.paneBusy(currentPane),
 					Failure: currentPane.failure,
-				})
+				}
+				if placement := currentPane.floating; placement != nil {
+					paneStatus.Floating = true
+					paneStatus.Anchor = placement.anchor
+					paneStatus.WidthPct = placement.widthPct
+					paneStatus.HeightPct = placement.heightPct
+				}
+				tabStatus.Panes = append(tabStatus.Panes, paneStatus)
 			}
 			ws.Tabs = append(ws.Tabs, tabStatus)
 		}
@@ -351,15 +358,33 @@ func (m *Model) apiPaneCreate(payload api.PaneCreate, answer func(any, string, s
 	}
 
 	var newPane *pane
-	switch strings.ToLower(payload.Split) {
+	switch strings.ToLower(strings.TrimSpace(payload.Split)) {
 	case "", "right":
 		newPane = m.addPaneSide(target, kind, true, false)
 	case "down":
 		newPane = m.addPaneSide(target, kind, false, false)
 	case "tab":
 		newPane = m.addTab(target, kind)
+	case "float":
+		anchor := strings.ToLower(strings.TrimSpace(payload.Anchor))
+		if anchor == "" {
+			anchor = "center"
+		}
+		if anchor != "center" && anchor != "top" && anchor != "bottom" && anchor != "left" && anchor != "right" {
+			answer(nil, api.CodeInvalidParams, "anchor must be center, top, bottom, left, or right")
+			return nil
+		}
+		if payload.WidthPct == nil || payload.HeightPct == nil {
+			answer(nil, api.CodeInvalidParams, "width_pct and height_pct are required for float")
+			return nil
+		}
+		if *payload.WidthPct < 1 || *payload.WidthPct > 100 || *payload.HeightPct < 1 || *payload.HeightPct > 100 {
+			answer(nil, api.CodeInvalidParams, "width_pct and height_pct must be between 1 and 100")
+			return nil
+		}
+		newPane = m.addFloatingPane(target, kind, anchor, *payload.WidthPct, *payload.HeightPct)
 	default:
-		answer(nil, api.CodeInvalidParams, fmt.Sprintf("unknown split %q (right, down, tab)", payload.Split))
+		answer(nil, api.CodeInvalidParams, fmt.Sprintf("unknown split %q (right, down, tab, float)", payload.Split))
 		return nil
 	}
 	m.resizePanes(target)

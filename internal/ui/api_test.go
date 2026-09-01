@@ -6,6 +6,8 @@ import (
 	"github.com/patriceckhart/hrdx/internal/api"
 )
 
+func apiIntPtr(value int) *int { return &value }
+
 func apiCall(t *testing.T, model *Model, method string, payload any) api.Reply {
 	t.Helper()
 	reply := make(chan api.Reply, 1)
@@ -108,6 +110,27 @@ func TestAPIPaneCreate(t *testing.T) {
 		t.Fatalf("web tabs = %d, want 2", len(web.tabs))
 	}
 
+	answer = apiCall(t, &model, "pane.create", api.PaneCreate{
+		Split: "float", Anchor: "right", WidthPct: apiIntPtr(40), HeightPct: apiIntPtr(30),
+	})
+	if answer.Err != "" {
+		t.Fatalf("float error: %s", answer.Err)
+	}
+	floating := web.tab().panes[len(web.tab().panes)-1]
+	if floating.floating == nil || floating.floating.anchor != "right" ||
+		floating.floating.widthPct != 40 || floating.floating.heightPct != 30 {
+		t.Fatalf("floating pane = %+v", floating.floating)
+	}
+	if web.tab().layout.contains(floating) {
+		t.Fatal("floating pane must not join the split tree")
+	}
+	status := model.apiStatus()
+	floatingStatus := status.Workspaces[1].Tabs[1].Panes[len(status.Workspaces[1].Tabs[1].Panes)-1]
+	if !floatingStatus.Floating || floatingStatus.Anchor != "right" ||
+		floatingStatus.WidthPct != 40 || floatingStatus.HeightPct != 30 {
+		t.Fatalf("floating status = %+v", floatingStatus)
+	}
+
 	answer = apiCall(t, &model, "pane.create", api.PaneCreate{Workspace: "missing"})
 	if answer.Code != api.CodeNotFound {
 		t.Fatalf("unknown workspace = %q, want not_found", answer.Code)
@@ -115,6 +138,16 @@ func TestAPIPaneCreate(t *testing.T) {
 	answer = apiCall(t, &model, "pane.create", api.PaneCreate{Split: "diagonal"})
 	if answer.Code != api.CodeInvalidParams {
 		t.Fatalf("unknown split = %q, want invalid_params", answer.Code)
+	}
+	for _, payload := range []api.PaneCreate{
+		{Split: "float"},
+		{Split: "float", Anchor: "corner", WidthPct: apiIntPtr(40), HeightPct: apiIntPtr(30)},
+		{Split: "float", WidthPct: apiIntPtr(0), HeightPct: apiIntPtr(30)},
+		{Split: "float", WidthPct: apiIntPtr(40), HeightPct: apiIntPtr(101)},
+	} {
+		if answer = apiCall(t, &model, "pane.create", payload); answer.Code != api.CodeInvalidParams {
+			t.Fatalf("invalid float %+v = %q, want invalid_params", payload, answer.Code)
+		}
 	}
 }
 

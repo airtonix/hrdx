@@ -79,15 +79,21 @@ type Config struct {
 	CacheDir     string // directory for the update check cache
 }
 
+type floatPlacement struct {
+	anchor              string
+	widthPct, heightPct int
+}
+
 type pane struct {
-	id      int
-	name    string
-	kind    string // agent kind ("zot", "pi", "claude", "codex") or "shell"
-	term    *term.Pane
-	running bool
-	failure string
-	resume  bool  // restored agent pane: relaunch resuming its session
-	session int64 // holder session to reattach to on restore, 0 = start fresh
+	id       int
+	name     string
+	kind     string // agent kind ("zot", "pi", "claude", "codex") or "shell"
+	term     *term.Pane
+	running  bool
+	failure  string
+	resume   bool  // restored agent pane: relaunch resuming its session
+	session  int64 // holder session to reattach to on restore, 0 = start fresh
+	floating *floatPlacement
 }
 
 // tab is one tabbed layout of panes inside a workspace.
@@ -502,9 +508,35 @@ func (m *Model) addPane(target *space, kind string, vertical bool) *pane {
 
 func (m *Model) addPaneSide(target *space, kind string, vertical, before bool) *pane {
 	currentTab := target.tab()
+	newPane := m.newPane(target, kind)
+
+	if currentTab.layout == nil {
+		currentTab.layout = leafNode(newPane)
+	} else {
+		focused := currentTab.panes[currentTab.selected]
+		if focused.floating != nil {
+			currentTab.layout.walk(func(candidate *pane) { focused = candidate })
+		}
+		insertAtSide(currentTab.layout, focused, newPane, vertical, before)
+	}
+	currentTab.panes = append(currentTab.panes, newPane)
+	currentTab.selected = len(currentTab.panes) - 1
+	return newPane
+}
+
+func (m *Model) addFloatingPane(target *space, kind, anchor string, widthPct, heightPct int) *pane {
+	currentTab := target.tab()
+	newPane := m.newPane(target, kind)
+	newPane.floating = &floatPlacement{anchor: anchor, widthPct: widthPct, heightPct: heightPct}
+	currentTab.panes = append(currentTab.panes, newPane)
+	currentTab.selected = len(currentTab.panes) - 1
+	return newPane
+}
+
+func (m *Model) newPane(target *space, kind string) *pane {
 	count := 1
-	for _, currentTabs := range target.tabs {
-		for _, existing := range currentTabs.panes {
+	for _, currentTab := range target.tabs {
+		for _, existing := range currentTab.panes {
 			if existing.kind == kind {
 				count++
 			}
@@ -512,15 +544,6 @@ func (m *Model) addPaneSide(target *space, kind string, vertical, before bool) *
 	}
 	newPane := &pane{id: m.nextID, name: fmt.Sprintf("%s %d", kind, count), kind: kind}
 	m.nextID++
-
-	if currentTab.layout == nil {
-		currentTab.layout = leafNode(newPane)
-	} else {
-		focused := currentTab.panes[currentTab.selected]
-		insertAtSide(currentTab.layout, focused, newPane, vertical, before)
-	}
-	currentTab.panes = append(currentTab.panes, newPane)
-	currentTab.selected = len(currentTab.panes) - 1
 	return newPane
 }
 
@@ -581,7 +604,7 @@ func (m Model) startPane(owner *space, target *pane) tea.Cmd {
 	cols, rows := 80, 24
 	if m.width > 0 && m.height > 0 {
 		for _, currentTab := range owner.tabs {
-			for _, pr := range m.layoutFor(currentTab) {
+			for _, pr := range m.allPaneLayout(currentTab) {
 				if pr.pane == target {
 					inner := pr.r.inner()
 					cols, rows = inner.w, inner.h
@@ -699,13 +722,45 @@ func (m Model) layoutAll(target *tab) ([]paneRect, []divRect) {
 	return panes, divs
 }
 
+func (m Model) floatingLayout(target *tab) []paneRect {
+	area := m.terminalArea()
+	var panes []paneRect
+	for _, current := range target.panes {
+		placement := current.floating
+		if placement == nil {
+			continue
+		}
+		width := clampInt(area.w*placement.widthPct/100, minPaneCols, area.w)
+		height := clampInt(area.h*placement.heightPct/100, minPaneRows, area.h)
+		x := area.x + (area.w-width)/2
+		y := area.y + (area.h-height)/2
+		switch placement.anchor {
+		case "top":
+			y = area.y
+		case "bottom":
+			y = area.y + area.h - height
+		case "left":
+			x = area.x
+		case "right":
+			x = area.x + area.w - width
+		}
+		panes = append(panes, paneRect{pane: current, r: rect{x: x, y: y, w: width, h: height}})
+	}
+	return panes
+}
+
+func (m Model) allPaneLayout(target *tab) []paneRect {
+	panes := m.layoutFor(target)
+	return append(panes, m.floatingLayout(target)...)
+}
+
 // resizePanes pushes the layout geometry of every tab into its PTYs, not
 // just the active one: hidden tabs must track size changes too, otherwise
 // switching back shows a stale-size buffer with wrapped leftovers.
 // PTYs get the content size inside each pane's border.
 func (m *Model) resizePanes(target *space) {
 	for _, currentTab := range target.tabs {
-		for _, pr := range m.layoutFor(currentTab) {
+		for _, pr := range m.allPaneLayout(currentTab) {
 			if pr.pane.term != nil {
 				inner := pr.r.inner()
 				pr.pane.term.Resize(inner.w, inner.h)
@@ -1636,11 +1691,13 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Right-click on a pane opens the context menu.
+	// Right-click on a pane opens the context menu. Search in reverse render
+	// order so overlapping floating panes receive the click from the top down.
 	if inTerminal && msg.Button == tea.MouseButtonRight && msg.Action == tea.MouseActionPress {
 		if currentSpace := m.currentSpace(); currentSpace != nil {
-			panes, _ := m.layoutAll(currentSpace.tab())
-			for _, pr := range panes {
+			panes := m.allPaneLayout(currentSpace.tab())
+			for index := len(panes) - 1; index >= 0; index-- {
+				pr := panes[index]
 				if pr.r.hit(localX, localY) {
 					m.focusPane(currentSpace, pr.pane)
 					m.openMenu(pr.pane, rect{x: msg.X, y: msg.Y - 1})
@@ -1698,8 +1755,24 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		panes, divs := m.layoutAll(currentSpace.tab())
+		floats := m.floatingLayout(currentSpace.tab())
+		panes = append(panes, floats...)
+		overFloat := false
+		for index := len(floats) - 1; index >= 0; index-- {
+			pr := floats[index]
+			if !pr.r.hit(localX, localY) {
+				continue
+			}
+			overFloat = true
+			if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress &&
+				localY == pr.r.y && localX >= pr.r.x+pr.r.w-4 {
+				m.removePane(currentSpace, pr.pane)
+				return m, nil
+			}
+			break
+		}
 
-		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+		if !overFloat && msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
 			for _, dv := range divs {
 				if dv.r.hit(localX, localY) {
 					m.drag = dv.node
@@ -1709,7 +1782,8 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		for _, pr := range panes {
+		for index := len(panes) - 1; index >= 0; index-- {
+			pr := panes[index]
 			if !pr.r.hit(localX, localY) {
 				continue
 			}
@@ -1886,7 +1960,13 @@ func (m *Model) focusPane(owner *space, target *pane) {
 		for index, current := range currentTab.panes {
 			if current == target {
 				owner.active = tabIndex
-				currentTab.selected = index
+				if target.floating != nil && index != len(currentTab.panes)-1 {
+					currentTab.panes = append(currentTab.panes[:index], currentTab.panes[index+1:]...)
+					currentTab.panes = append(currentTab.panes, target)
+					currentTab.selected = len(currentTab.panes) - 1
+				} else {
+					currentTab.selected = index
+				}
 				m.clearFocusedAttention()
 				return
 			}
@@ -2056,9 +2136,13 @@ func (m Model) sidebarRows() []sidebarRow {
 				paneNameWidth = sidebarWidth - tabNameWidth - 7
 			}
 
+			shownPanes := 0
 			for paneIndex, currentPane := range currentTab.panes {
+				if currentPane.floating != nil {
+					continue
+				}
 				rowIndent := paneIndent
-				if showTabs && paneIndex == 0 {
+				if showTabs && shownPanes == 0 {
 					tabStyle := stylePaneDim
 					tabMarker := "  "
 					if spaceIndex == m.selected && tabIndex == currentSpace.active {
@@ -2091,6 +2175,7 @@ func (m Model) sidebarRows() []sidebarRow {
 					label: rowIndent + m.sidebarPaneIcon(currentPane) + nameLabel + state,
 					kind:  "pane", space: spaceIndex, tab: tabIndex, pane: paneIndex,
 				})
+				shownPanes++
 			}
 		}
 	}
@@ -2178,7 +2263,7 @@ func (m Model) publishCursor() {
 		if !visible {
 			break
 		}
-		for _, pr := range m.layoutFor(currentSpace.tab()) {
+		for _, pr := range m.allPaneLayout(currentSpace.tab()) {
 			if pr.pane != current {
 				continue
 			}
@@ -2341,7 +2426,7 @@ func (m Model) renderSidebar() string {
 func (m Model) renderTerminal() string {
 	area := m.terminalArea()
 	currentSpace := m.currentSpace()
-	if currentSpace == nil || currentSpace.tab().layout == nil {
+	if currentSpace == nil {
 		return lipgloss.NewStyle().Padding(1, 2).Width(area.w).Height(area.h).
 			Render(styleMuted.Render("no panes. " + m.prefixTrigger + " " + m.primaryKey("workspace") + " opens a new workspace."))
 	}
@@ -2381,6 +2466,20 @@ func (m Model) renderTerminal() string {
 			out.WriteString(seg.text)
 		}
 		rows[y] = out.String()
+		if lipgloss.Width(rows[y]) < area.w {
+			rows[y] += strings.Repeat(" ", area.w-lipgloss.Width(rows[y]))
+		}
+	}
+
+	for _, pr := range m.floatingLayout(currentSpace.tab()) {
+		isFocused := pr.pane == focused
+		lines := m.paneLines(pr, isFocused, isFocused && m.mode == modeTerminal)
+		for index, line := range lines {
+			y := pr.r.y + index
+			if y >= 0 && y < len(rows) {
+				rows[y] = overlayAt(rows[y], line, pr.r.x, pr.r.w)
+			}
+		}
 	}
 	return strings.Join(rows, "\n")
 }
@@ -2519,8 +2618,14 @@ func (m Model) paneLines(pr paneRect, focused, showCursor bool) []string {
 	}
 
 	horizontal := strings.Repeat("─", max(0, pr.r.w-2))
-	title := " " + truncate(m.paneDisplayName(target), max(0, pr.r.w-6)) + " "
-	top := "╭" + title + strings.Repeat("─", max(0, pr.r.w-2-lipgloss.Width(title))) + "╮"
+	titleLimit := pr.r.w - 6
+	closeLabel := ""
+	if target.floating != nil {
+		titleLimit -= 4
+		closeLabel = " x "
+	}
+	title := " " + truncate(m.paneDisplayName(target), max(0, titleLimit)) + " "
+	top := "╭" + title + strings.Repeat("─", max(0, pr.r.w-2-lipgloss.Width(title)-lipgloss.Width(closeLabel))) + closeLabel + "╮"
 	bottom := "╰" + horizontal + "╯"
 	side := borderStyle.Render("│")
 
@@ -2753,19 +2858,27 @@ func (m *Model) selectTab(delta int) {
 	m.clearFocusedAttention()
 }
 
-// cyclePane moves focus through the active tab's panes in layout order.
+// cyclePane moves focus through split panes in layout order, followed by
+// floating panes in their current stacking order.
 func (m *Model) cyclePane(delta int) {
 	currentSpace := m.currentSpace()
 	if currentSpace == nil {
 		return
 	}
 	currentTab := currentSpace.tab()
-	if len(currentTab.panes) < 2 || currentTab.layout == nil {
+	if len(currentTab.panes) < 2 {
 		return
 	}
 
 	ordered := make([]*pane, 0, len(currentTab.panes))
-	currentTab.layout.walk(func(target *pane) { ordered = append(ordered, target) })
+	if currentTab.layout != nil {
+		currentTab.layout.walk(func(target *pane) { ordered = append(ordered, target) })
+	}
+	for _, target := range currentTab.panes {
+		if target.floating != nil {
+			ordered = append(ordered, target)
+		}
+	}
 	current := m.currentPane()
 	position := -1
 	for index, target := range ordered {
@@ -2778,13 +2891,7 @@ func (m *Model) cyclePane(delta int) {
 		return
 	}
 	next := ordered[(position+delta+len(ordered))%len(ordered)]
-	for index, target := range currentTab.panes {
-		if target == next {
-			currentTab.selected = index
-			m.clearFocusedAttention()
-			return
-		}
-	}
+	m.focusPane(currentSpace, next)
 }
 
 func (m *Model) closeCurrentPane() {
@@ -2894,9 +3001,9 @@ func (m *Model) closeAll() {
 				if currentPane.term == nil {
 					continue
 				}
-				if m.holder != nil && currentPane.term.HolderSession() != 0 {
-					// Holder-backed: detach and leave the process running
-					// so the next launch reattaches to it.
+				if currentPane.floating == nil && m.holder != nil && currentPane.term.HolderSession() != 0 {
+					// Holder-backed persistent panes detach so the next launch
+					// can reattach. Floating panes are ephemeral and close instead.
 					currentPane.term.Detach()
 					continue
 				}

@@ -220,6 +220,7 @@ SOCK="$HOME/Library/Application Support/hrdx/hrdx.sock"   # macOS
 echo '{"id": "1", "method": "status"}' | nc -U "$SOCK"
 echo '{"id": "2", "method": "workspace.create", "params": {"path": "~/Developer/api", "agent": "claude"}}' | nc -U "$SOCK"
 echo '{"id": "3", "method": "pane.create", "params": {"workspace": "api", "kind": "shell", "split": "down"}}' | nc -U "$SOCK"
+echo '{"id": "3b", "method": "pane.create", "params": {"workspace": "api", "kind": "shell", "split": "float", "anchor": "center", "width_pct": 40, "height_pct": 30}}' | nc -U "$SOCK"
 echo '{"id": "4", "method": "pane.send_text", "params": {"pane_id": 3, "text": "run the tests", "enter": true}}' | nc -U "$SOCK"
 echo '{"id": "5", "method": "pane.wait", "params": {"pane_id": 3, "until": "idle"}}' | nc -U "$SOCK"
 echo '{"id": "6", "method": "pane.read", "params": {"pane_id": 3}}' | nc -U "$SOCK"
@@ -232,7 +233,7 @@ echo '{"id": "7", "method": "menu.register", "params": {"target": "pane", "label
 | `status` | Workspaces, tabs, and panes with id, kind, running, and busy state |
 | `workspace.create` | Open a directory as a workspace (`path`, optional `agent`) |
 | `workspace.close` | Close a workspace by name or path |
-| `pane.create` | Add a pane (`workspace` name or path, `kind`, `split`: `right`, `down`, `tab`) |
+| `pane.create` | Add a pane (`workspace` name or path, `kind`, `split`: `right`, `down`, `tab`, `float`) |
 | `pane.send_text` | Type into a pane (`pane_id`, `text`, optional `enter`) |
 | `pane.read` | The pane's visible screen as plain text |
 | `pane.wait` | Block until a pane's agent is `idle` or `busy` (`until`, optional `timeout_ms`) |
@@ -245,6 +246,8 @@ Successful responses are `{"id": "...", "result": {...}}`; failures are `{"id": 
 After `events.subscribe` the connection stays open and hrdx pushes lines like `{"event": "pane.busy_changed", "data": {"pane_id": 3, "busy": false}}`. Events: `workspace.created`, `workspace.closed`, `pane.created`, `pane.closed`, `pane.busy_changed`, and `menu.action`, so a script can react the moment an agent finishes instead of polling.
 
 A `menu.register` entry appears after the built-in actions in the requested context menu. Selecting it publishes `{"event":"menu.action","data":{"action_id":"custom.run_linter","target":"pane","pane_id":3,"workspace":"api","path":"/path/to/api","tab_index":0}}`. Registrations are ephemeral, re-registering an `action_id` replaces it, and events use the API's existing best-effort delivery for slow subscribers.
+
+With `split: "float"`, `width_pct` and `height_pct` are required integers from 1 through 100. `anchor` defaults to `center` and also accepts `top`, `bottom`, `left`, or `right`. Floating panes belong to the active tab, render above its split layout without changing pane ratios, and are omitted from the sidebar and persisted state. Multiple floats stack in creation or focus order. Close one with its title-bar `x` or the existing `pane.close` method. They remain discoverable in `status` through `floating`, `anchor`, `width_pct`, and `height_pct` fields.
 
 Every request is answered by the TUI's own update loop, so the API always sees exactly what is on screen. `pane.wait` plus `pane.send_text` is enough to build simple agent pipelines: prompt an agent, wait until it is idle, read the screen, move on.
 

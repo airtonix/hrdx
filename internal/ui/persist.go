@@ -17,10 +17,16 @@ func (m *Model) snapshot() state.State {
 			Active: currentSpace.active,
 		}
 		for _, currentTab := range currentSpace.tabs {
-			savedTab := state.Tab{Name: currentTab.name, Selected: currentTab.selected}
+			savedTab := state.Tab{Name: currentTab.name}
 			index := make(map[*pane]int, len(currentTab.panes))
-			for i, currentPane := range currentTab.panes {
-				index[currentPane] = i
+			for paneIndex, currentPane := range currentTab.panes {
+				if currentPane.floating != nil {
+					continue
+				}
+				index[currentPane] = len(savedTab.Panes)
+				if paneIndex == currentTab.selected {
+					savedTab.Selected = len(savedTab.Panes)
+				}
 				savedTab.Panes = append(savedTab.Panes, state.Pane{
 					Kind: currentPane.kind, Name: currentPane.name, Session: currentPane.session,
 				})

@@ -1,6 +1,10 @@
 package ui
 
-import "testing"
+import (
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
 
 func TestSplitInsertLayoutRemove(t *testing.T) {
 	a := &pane{id: 1}
@@ -63,6 +67,57 @@ func TestDividerDragChangesRatio(t *testing.T) {
 	model.applyDrag(divs[0].full.x+divs[0].full.w/4, 0)
 	if ratio := divs[0].node.ratio; ratio > 0.3 {
 		t.Fatalf("ratio = %f, want roughly 0.25", ratio)
+	}
+}
+
+func TestFloatingLayoutAnchorsAndClamps(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	model.width = 127
+	model.height = 43
+	currentTab := model.spaces[0].tab()
+	area := model.terminalArea()
+
+	left := model.addFloatingPane(model.spaces[0], "shell", "left", 40, 30)
+	tiny := model.addFloatingPane(model.spaces[0], "shell", "bottom", 1, 1)
+	floating := model.floatingLayout(currentTab)
+	if len(floating) != 2 {
+		t.Fatalf("floating rects = %d, want 2", len(floating))
+	}
+	if floating[0].pane != left || floating[0].r.x != area.x || floating[0].r.y != (area.h-floating[0].r.h)/2 {
+		t.Fatalf("left rect = %+v in area %+v", floating[0].r, area)
+	}
+	if floating[1].pane != tiny || floating[1].r.h != minPaneRows || floating[1].r.w != minPaneCols ||
+		floating[1].r.y+floating[1].r.h != area.y+area.h {
+		t.Fatalf("clamped bottom rect = %+v in area %+v", floating[1].r, area)
+	}
+}
+
+func TestFloatingPaneIsHiddenFromSidebarAndClosesFromTitle(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	model.width = 127
+	model.height = 43
+	currentSpace := model.spaces[0]
+	floating := model.addFloatingPane(currentSpace, "shell", "center", 40, 30)
+
+	paneRows := 0
+	for _, row := range model.sidebarRows() {
+		if row.kind == "pane" {
+			paneRows++
+		}
+	}
+	if paneRows != 1 {
+		t.Fatalf("sidebar pane rows = %d, want only the split pane", paneRows)
+	}
+
+	placement := model.floatingLayout(currentSpace.tab())[0].r
+	_, _ = model.updateMouse(tea.MouseMsg{
+		X:      sidebarWidth + 1 + placement.x + placement.w - 3,
+		Y:      2 + placement.y,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionPress,
+	})
+	if found, _ := model.paneByID(floating.id); found != nil {
+		t.Fatal("floating pane still exists after title-bar close click")
 	}
 }
 
