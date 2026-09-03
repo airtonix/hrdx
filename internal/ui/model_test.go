@@ -261,10 +261,10 @@ func TestFooterShowsAgentSummaryOnRight(t *testing.T) {
 	}
 }
 
-func TestMenuFooterShowsCustomPickerKeys(t *testing.T) {
+func TestMenuFooterShowsCustomNavigationKeys(t *testing.T) {
 	model := newTestModel("/tmp/api")
-	model.keyOverrides = map[string]string{"picker-up": "home", "picker-down": "end"}
-	model.pickerKeys = buildPickerKeys(model.keyOverrides)
+	model.keyOverrides = map[string]string{"navigate-up": "home", "navigate-down": "end"}
+	model.navKeys = buildNavigationKeys(model.keyOverrides)
 	model.openKindPicker("tab", model.currentSpace(), "", rect{x: 1, y: 1})
 
 	footer := model.renderFooter()

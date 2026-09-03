@@ -60,6 +60,27 @@ func TestFindFiltersAndJumps(t *testing.T) {
 	}
 }
 
+func TestFindCustomNavigationKeys(t *testing.T) {
+	model := newTestModel("/tmp/api", "/tmp/web")
+	model.navKeys = buildNavigationKeys(map[string]string{
+		"navigate-up": "home", "navigate-down": "end",
+	})
+	updated, _ := model.openFind()
+	model = updated.(Model)
+	model.findIndex = 1
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyHome})
+	model = updated.(Model)
+	if model.findIndex != 0 {
+		t.Fatalf("findIndex after home = %d, want 0", model.findIndex)
+	}
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyEnd})
+	model = updated.(Model)
+	if model.findIndex != 1 {
+		t.Fatalf("findIndex after end = %d, want 1", model.findIndex)
+	}
+}
+
 func TestFindEscCloses(t *testing.T) {
 	model := newTestModel("/tmp/api")
 	updated, _ := model.openFind()

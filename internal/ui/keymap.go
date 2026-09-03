@@ -7,9 +7,8 @@ import (
 	"strings"
 )
 
-// keymapFile declares prefix key overrides in the state directory. The
-// format maps action names to a single key, replacing that action's
-// default keys: {"find": "f", "quit": "Q"}.
+// keymapFile declares key overrides in the state directory. The format maps
+// action names to a single key: {"find": "f", "navigate-up": "home"}.
 const keymapFile = "keys.json"
 
 // defaultPrefixKeys maps every prefix action to its default keys. The
@@ -20,7 +19,6 @@ var defaultPrefixKeys = map[string][]string{
 	"quit":         {"q"},
 	"picker-right": {"c"},
 	"picker-down":  {"C"},
-	"picker-up":    {},
 	"agent-right":  {"a"},
 	"agent-down":   {"A"},
 	"agent-cycle":  {},
@@ -46,6 +44,11 @@ var defaultPrefixKeys = map[string][]string{
 	"live":         {"esc", "G"},
 }
 
+var navigationActions = map[string]bool{
+	"navigate-up":   true,
+	"navigate-down": true,
+}
+
 // buildPrefixKeys resolves the key -> action table from the defaults and
 // the user's overrides. An override replaces all default keys of its
 // action and shadows whichever action held the key before. "prefix" is
@@ -56,7 +59,9 @@ func buildPrefixKeys(overrides map[string]string) map[string]string {
 	keys := map[string]string{}
 	overridden := map[string]bool{}
 	for action := range overrides {
-		overridden[action] = true
+		if _, ok := defaultPrefixKeys[action]; ok {
+			overridden[action] = true
+		}
 	}
 	for action, actionKeys := range defaultPrefixKeys {
 		if action == "prefix" || overridden[action] {
@@ -70,7 +75,9 @@ func buildPrefixKeys(overrides map[string]string) map[string]string {
 		if action == "prefix" {
 			continue
 		}
-		keys[key] = action
+		if _, ok := defaultPrefixKeys[action]; ok {
+			keys[key] = action
+		}
 	}
 	return keys
 }
@@ -88,7 +95,8 @@ func loadKeymap(dir string) (map[string]string, string) {
 	}
 	var unknown []string
 	for action, key := range overrides {
-		if _, ok := defaultPrefixKeys[action]; !ok {
+		_, prefixAction := defaultPrefixKeys[action]
+		if !prefixAction && !navigationActions[action] {
 			unknown = append(unknown, action)
 			delete(overrides, action)
 			continue
@@ -103,15 +111,15 @@ func loadKeymap(dir string) (map[string]string, string) {
 	return overrides, ""
 }
 
-// buildPickerKeys resolves custom picker navigation keys from keys.json.
-// Defaults stay hard-coded so arrows and j/k keep working.
-func buildPickerKeys(overrides map[string]string) map[string]string {
+// buildNavigationKeys resolves extra local navigation keys from keys.json.
+// Arrows and j/k remain available when custom keys are configured.
+func buildNavigationKeys(overrides map[string]string) map[string]string {
 	keys := map[string]string{}
-	for action, key := range overrides {
-		switch action {
-		case "picker-up", "picker-down":
-			keys[key] = action
-		}
+	if key := overrides["navigate-up"]; key != "" {
+		keys[key] = "navigate-up"
+	}
+	if key := overrides["navigate-down"]; key != "" {
+		keys[key] = "navigate-down"
 	}
 	return keys
 }

@@ -30,6 +30,13 @@ func TestBuildPrefixKeysOverride(t *testing.T) {
 	}
 }
 
+func TestBuildPrefixKeysExcludesNavigationOverrides(t *testing.T) {
+	keys := buildPrefixKeys(map[string]string{"navigate-up": "u", "navigate-down": "d"})
+	if keys["u"] != "scroll-up" || keys["d"] != "scroll-down" {
+		t.Fatalf("navigation overrides changed prefix keys: %v", keys)
+	}
+}
+
 func TestBuildPrefixKeysExcludesPrefixTrigger(t *testing.T) {
 	keys := buildPrefixKeys(nil)
 	if keys["ctrl+b"] != "literal" {
@@ -91,15 +98,15 @@ func TestIsSpuriousModifierKey(t *testing.T) {
 func TestLoadKeymap(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, keymapFile),
-		[]byte(`{"find": "f", "picker-up": "home", "bogus": "x"}`), 0o644); err != nil {
+		[]byte(`{"find": "f", "navigate-up": "home", "bogus": "x"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	overrides, problem := loadKeymap(dir)
 	if overrides["find"] != "f" {
 		t.Fatalf("overrides = %v, want find -> f", overrides)
 	}
-	if overrides["picker-up"] != "home" {
-		t.Fatalf("overrides = %v, want picker-up -> home", overrides)
+	if overrides["navigate-up"] != "home" {
+		t.Fatalf("overrides = %v, want navigate-up -> home", overrides)
 	}
 	if _, ok := overrides["bogus"]; ok {
 		t.Fatal("unknown action must be dropped")
@@ -109,13 +116,13 @@ func TestLoadKeymap(t *testing.T) {
 	}
 }
 
-func TestBuildPickerKeys(t *testing.T) {
-	keys := buildPickerKeys(map[string]string{"picker-up": "home", "picker-down": "end", "find": "f"})
-	if keys["home"] != "picker-up" || keys["end"] != "picker-down" {
-		t.Fatalf("picker keys = %v, want home/end bindings", keys)
+func TestBuildNavigationKeys(t *testing.T) {
+	keys := buildNavigationKeys(map[string]string{"navigate-up": "home", "navigate-down": "end", "find": "f"})
+	if keys["home"] != "navigate-up" || keys["end"] != "navigate-down" {
+		t.Fatalf("navigation keys = %v, want home/end bindings", keys)
 	}
 	if _, ok := keys["f"]; ok {
-		t.Fatal("non-picker keys must not be included")
+		t.Fatal("non-navigation keys must not be included")
 	}
 }
 
@@ -147,7 +154,7 @@ func TestPrefixHintEntriesUseSpaceSeparator(t *testing.T) {
 	}
 }
 
-func TestMenuPickerKeysDispatch(t *testing.T) {
+func TestMenuNavigationKeysDispatch(t *testing.T) {
 	model := newTestModel("/tmp/api")
 	model.openKindPicker("tab", model.currentSpace(), "", rect{x: 1, y: 1})
 	model.menuIndex = 1
@@ -164,8 +171,8 @@ func TestMenuPickerKeysDispatch(t *testing.T) {
 		t.Fatalf("menuIndex after j = %d, want 1", model.menuIndex)
 	}
 
-	model.keyOverrides = map[string]string{"picker-up": "home", "picker-down": "end"}
-	model.pickerKeys = buildPickerKeys(model.keyOverrides)
+	model.keyOverrides = map[string]string{"navigate-up": "home", "navigate-down": "end"}
+	model.navKeys = buildNavigationKeys(model.keyOverrides)
 
 	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyHome})
 	model = updated.(Model)

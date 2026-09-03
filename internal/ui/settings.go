@@ -184,6 +184,14 @@ func (m Model) settingsTabCells() []tabCell {
 
 func (m Model) updateSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	rows := m.settingsRows()
+	switch m.navigationAction(msg) {
+	case "navigate-up":
+		m.settingsIndex = (m.settingsIndex - 1 + len(rows)) % len(rows)
+		return m, nil
+	case "navigate-down":
+		m.settingsIndex = (m.settingsIndex + 1) % len(rows)
+		return m, nil
+	}
 	switch msg.String() {
 	case "esc", "q", "ctrl+c":
 		m.closeSettings()
@@ -195,12 +203,6 @@ func (m Model) updateSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab", "left", "h":
 		m.settingsTab = (m.settingsTab - 1 + len(settingsTabNames)) % len(settingsTabNames)
 		m.settingsIndex = 0
-		return m, nil
-	case "up", "k":
-		m.settingsIndex = (m.settingsIndex - 1 + len(rows)) % len(rows)
-		return m, nil
-	case "down", "j":
-		m.settingsIndex = (m.settingsIndex + 1) % len(rows)
 		return m, nil
 	case "enter", " ":
 		if m.settingsIndex >= 0 && m.settingsIndex < len(rows) {
