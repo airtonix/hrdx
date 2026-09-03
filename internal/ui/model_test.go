@@ -326,6 +326,74 @@ func TestSidebarOverflowMarkersUseIconSpacing(t *testing.T) {
 	}
 }
 
+func TestSidebarToggleCollapsesAndPreservesSelection(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	currentSpace := model.spaces[0]
+	model.addPane(currentSpace, "shell", true)
+	model.addTab(currentSpace, "shell")
+	selectedPane := model.currentPane()
+	wide := model.terminalArea().w
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlB})
+	model = updated.(Model)
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	model = updated.(Model)
+
+	if !model.sideCollapsed {
+		t.Fatal("sidebar should be collapsed after prefix b")
+	}
+	if model.currentPane() != selectedPane || model.selected != 0 {
+		t.Fatal("collapsing sidebar changed the current selection")
+	}
+	if got, want := model.terminalArea().w, wide+(sidebarWidth-collapsedSidebarWidth); got != want {
+		t.Fatalf("terminal width = %d, want %d", got, want)
+	}
+	rows := model.sidebarRows()
+	if rows[2].kind != "space" || !strings.Contains(rows[2].label, "a") {
+		t.Fatalf("collapsed workspace row = %+v, want initial", rows[2])
+	}
+	dotColumn := -1
+	for _, row := range rows {
+		if row.kind != "pane" {
+			continue
+		}
+		dot := strings.Index(row.label, "○")
+		if dot < 0 {
+			dot = strings.Index(row.label, "●")
+		}
+		if dot < 0 {
+			t.Fatalf("collapsed pane row lacks activity dot: %+v", row)
+		}
+		column := lipgloss.Width(row.label[:dot])
+		if dotColumn < 0 {
+			dotColumn = column
+		} else if column != dotColumn {
+			t.Fatalf("collapsed pane dot column = %d, want %d in row %q", column, dotColumn, row.label)
+		}
+	}
+	if !strings.Contains(rows[5].label, "▸") || !strings.Contains(rows[5].label, "2") || strings.Contains(rows[3].label, "▸") {
+		t.Fatalf("collapsed tab rows = %q / %q, want reserved marker before tab number", rows[3].label, rows[5].label)
+	}
+}
+
+func TestMouseToggleCollapsesAndExpandsSidebar(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	updated, _ := model.updateMouse(tea.MouseMsg{X: sidebarWidth - 2, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	got := updated.(Model)
+	if !got.sideCollapsed {
+		t.Fatal("clicking the expanded sidebar toggle should collapse it")
+	}
+	if hit := got.sidebarHit(got.height - 4); hit.kind != "settings" {
+		t.Fatalf("settings hit = %+v, want settings to remain on the bottom row", hit)
+	}
+
+	updated, _ = got.updateMouse(tea.MouseMsg{X: collapsedSidebarWidth - 2, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	got = updated.(Model)
+	if got.sideCollapsed {
+		t.Fatal("clicking the collapsed sidebar toggle should expand it")
+	}
+}
+
 func TestMouseSelectsSpace(t *testing.T) {
 	model := newTestModel("/tmp/api", "/tmp/web")
 	// Sidebar row 6 (space web) is screen Y=7.

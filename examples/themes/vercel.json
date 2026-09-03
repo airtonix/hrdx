@@ -12,5 +12,9 @@
     "bar_bg": "#1a1a1a",
     "bar_fg": 255,
     "ink": 232
+  },
+  "icons": {
+    "sidebar_collapse": "‹",
+    "sidebar_expand": "›"
   }
 }

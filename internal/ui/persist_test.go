@@ -12,9 +12,10 @@ func TestSnapshotRestoreRoundTrip(t *testing.T) {
 	model.addPane(firstSpace, "shell", true)
 	model.addTab(firstSpace, "zot")
 	model.selected = 1
+	model.sideCollapsed = true
 
 	saved := model.snapshot()
-	if len(saved.Workspaces) != 2 || saved.Selected != 1 {
+	if len(saved.Workspaces) != 2 || saved.Selected != 1 || !saved.SidebarCollapsed {
 		t.Fatalf("snapshot = %+v", saved)
 	}
 	ws := saved.Workspaces[0]
@@ -26,8 +27,8 @@ func TestSnapshotRestoreRoundTrip(t *testing.T) {
 	}
 
 	restored := New(Config{Shell: "/bin/sh"}, nil, "", saved)
-	if len(restored.spaces) != 2 || restored.selected != 1 {
-		t.Fatalf("restored = %d spaces selected %d", len(restored.spaces), restored.selected)
+	if len(restored.spaces) != 2 || restored.selected != 1 || !restored.sideCollapsed {
+		t.Fatalf("restored = %d spaces selected %d collapsed %v", len(restored.spaces), restored.selected, restored.sideCollapsed)
 	}
 	first := restored.spaces[0]
 	if len(first.tabs) != 2 || first.active != 1 {
