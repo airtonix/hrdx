@@ -34,30 +34,51 @@ const (
 	modCtrl  = 4
 )
 
-// parseEnhancedFunctionalKey decodes unmodified functional keys emitted
-// with an explicit modifier parameter by the kitty keyboard protocol.
+// parseEnhancedFunctionalKey decodes otherwise-unmodified functional keys
+// emitted with an explicit modifier parameter by the kitty keyboard protocol.
+// Lock keys are included in that parameter even though they do not change the
+// functional key, so accept Caps Lock and Num Lock while rejecting real key
+// modifiers such as Shift, Alt, or Ctrl.
 func parseEnhancedFunctionalKey(data []byte) (tea.KeyMsg, bool) {
+	text := string(data)
+	if !strings.HasPrefix(text, "\x1b[") || len(text) < 5 {
+		return tea.KeyMsg{}, false
+	}
+	body := text[2 : len(text)-1]
+	fields := strings.Split(body, ";")
+	if len(fields) != 2 {
+		return tea.KeyMsg{}, false
+	}
+	modifier, err := strconv.Atoi(fields[1])
+	if err != nil || modifier < 1 {
+		return tea.KeyMsg{}, false
+	}
+	const lockModifiers = 64 | 128 // Caps Lock and Num Lock
+	if (modifier-1)&^lockModifiers != 0 {
+		return tea.KeyMsg{}, false
+	}
+
 	var keyType tea.KeyType
-	switch string(data) {
-	case "\x1b[1;1A":
+	switch {
+	case fields[0] == "1" && text[len(text)-1] == 'A':
 		keyType = tea.KeyUp
-	case "\x1b[1;1B":
+	case fields[0] == "1" && text[len(text)-1] == 'B':
 		keyType = tea.KeyDown
-	case "\x1b[1;1C":
+	case fields[0] == "1" && text[len(text)-1] == 'C':
 		keyType = tea.KeyRight
-	case "\x1b[1;1D":
+	case fields[0] == "1" && text[len(text)-1] == 'D':
 		keyType = tea.KeyLeft
-	case "\x1b[1;1H":
+	case fields[0] == "1" && text[len(text)-1] == 'H':
 		keyType = tea.KeyHome
-	case "\x1b[1;1F":
+	case fields[0] == "1" && text[len(text)-1] == 'F':
 		keyType = tea.KeyEnd
-	case "\x1b[2;1~":
+	case fields[0] == "2" && text[len(text)-1] == '~':
 		keyType = tea.KeyInsert
-	case "\x1b[3;1~":
+	case fields[0] == "3" && text[len(text)-1] == '~':
 		keyType = tea.KeyDelete
-	case "\x1b[5;1~":
+	case fields[0] == "5" && text[len(text)-1] == '~':
 		keyType = tea.KeyPgUp
-	case "\x1b[6;1~":
+	case fields[0] == "6" && text[len(text)-1] == '~':
 		keyType = tea.KeyPgDown
 	default:
 		return tea.KeyMsg{}, false

@@ -30,10 +30,10 @@ func TestEnhancedFunctionalKeysDriveLocalModes(t *testing.T) {
 	model.openKindPicker("tab", model.currentSpace(), "", rect{x: 1, y: 1})
 	model.menuIndex = 1
 
-	updated, _ := model.updateRaw([]byte("\x1b[1;1A"))
+	updated, _ := model.updateRaw([]byte("\x1b[1;129A"))
 	model = updated.(Model)
 	if model.menuIndex != 0 {
-		t.Fatalf("menuIndex after enhanced up = %d, want 0", model.menuIndex)
+		t.Fatalf("menuIndex after enhanced Num Lock up = %d, want 0", model.menuIndex)
 	}
 	updated, _ = model.updateRaw([]byte("\x1b[1;1B"))
 	model = updated.(Model)
@@ -58,15 +58,23 @@ func TestEnhancedFunctionalKeysFollowChildProtocolInTerminalMode(t *testing.T) {
 	host := &keyboardCaptureHost{}
 	target.term = term.NewHolderPane(host, 1, 80, 24)
 	target.running = true
-	input := []byte("\x1b[1;1A")
 
-	model.updateRaw(input)
-	if want := []byte("\x1b[A"); !bytes.Equal(host.input, want) {
-		t.Fatalf("legacy terminal input = %q, want %q", host.input, want)
+	for _, input := range []string{
+		"\x1b[1;1A",   // no lock keys
+		"\x1b[1;65A",  // Caps Lock
+		"\x1b[1;129A", // Num Lock
+		"\x1b[1;193A", // Caps Lock and Num Lock
+	} {
+		host.input = nil
+		model.updateRaw([]byte(input))
+		if want := []byte("\x1b[A"); !bytes.Equal(host.input, want) {
+			t.Errorf("legacy terminal input for %q = %q, want %q", input, host.input, want)
+		}
 	}
 
 	host.input = nil
 	target.term.Feed([]byte("\x1b[>1u"))
+	input := []byte("\x1b[1;129A")
 	model.updateRaw(input)
 	if !bytes.Equal(host.input, input) {
 		t.Fatalf("kitty terminal input = %q, want %q", host.input, input)
