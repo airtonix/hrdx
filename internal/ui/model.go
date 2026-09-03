@@ -148,6 +148,7 @@ type Model struct {
 	menuIndex     int
 	customMenus   []api.MenuRegister // ephemeral socket API context-menu entries
 	pickItems     []menuItem         // kind picker entries while it is open
+	navKeys       map[string]string  // custom local navigation overrides from keys.json
 	pickAction    string             // "space", "tab", "split-right", "split-down", "settings"
 	pickSpace     *space             // tab target for the picker
 	pickPath      string             // directory for a pending new workspace
@@ -431,7 +432,7 @@ func New(config Config, paths []string, statePath string, saved state.State) Mod
 		wasBusy: map[int]bool{}, soundSeq: map[int]uint64{}, paneAttention: map[int]bool{},
 		soundOn: saved.Sound, status: harnessProblem,
 		soundKind: saved.SoundKind, notifyOn: saved.Notify, themeName: saved.Theme,
-		prefixKeys: buildPrefixKeys(keymapOverrides), keyOverrides: keymapOverrides}
+		prefixKeys: buildPrefixKeys(keymapOverrides), navKeys: buildNavigationKeys(keymapOverrides), keyOverrides: keymapOverrides}
 	model.prefixTrigger = model.primaryKey("prefix")
 	if statePath != "" {
 		for _, problem := range []string{
@@ -940,10 +941,14 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateRaw routes raw CSI-u input from the host terminal. Kitty-aware
-// children (zot) get the sequence verbatim so chords like ctrl+1 survive;
-// legacy children (shells) get the classic encoding instead.
+// updateRaw routes enhanced keyboard input from the host terminal. Local
+// modes receive Bubble Tea key messages. Kitty-aware children get the raw
+// sequence, while legacy children get the classic encoding when available.
 func (m Model) updateRaw(raw []byte) (tea.Model, tea.Cmd) {
+	functionalKey, enhancedFunctional := parseEnhancedFunctionalKey(raw)
+	if enhancedFunctional && m.mode != modeTerminal {
+		return m.updateKey(functionalKey)
+	}
 	// Shift+PgUp / Shift+PgDn scroll the focused pane's history.
 	if m.mode == modeTerminal {
 		switch string(raw) {
@@ -969,8 +974,17 @@ func (m Model) updateRaw(raw []byte) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	// Local modes own keyboard input. Unknown host sequences must not leak
+	// through an open menu, prompt, settings window, or finder to the PTY.
+	if m.mode != modeTerminal {
+		return m, nil
+	}
 	current := m.currentPane()
 	if current == nil || current.term == nil || !current.running {
+		return m, nil
+	}
+	if enhancedFunctional && !current.term.KittyKeys() {
+		current.term.Write(term.EncodeKey(functionalKey, current.term.AppCursor()))
 		return m, nil
 	}
 	if !ok || current.term.KittyKeys() {
@@ -1048,15 +1062,17 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case modeMenu:
 		items := m.menuItems()
+		switch m.navigationAction(msg) {
+		case "navigate-up":
+			m.menuIndex = (m.menuIndex - 1 + len(items)) % len(items)
+			return m, nil
+		case "navigate-down":
+			m.menuIndex = (m.menuIndex + 1) % len(items)
+			return m, nil
+		}
 		switch msg.String() {
 		case "esc", "q":
 			m.closeMenu()
-			return m, nil
-		case "up", "k":
-			m.menuIndex = (m.menuIndex - 1 + len(items)) % len(items)
-			return m, nil
-		case "down", "j":
-			m.menuIndex = (m.menuIndex + 1) % len(items)
 			return m, nil
 		case "enter":
 			return m.runMenuAction(items[m.menuIndex].action)
@@ -1157,6 +1173,17 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // unaffected.
 func isSpuriousModifierKey(msg tea.KeyMsg) bool {
 	return msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 0
+}
+
+func (m Model) navigationAction(msg tea.KeyMsg) string {
+	switch msg.String() {
+	case "up", "k":
+		return "navigate-up"
+	case "down", "j":
+		return "navigate-down"
+	default:
+		return m.navKeys[msg.String()]
+	}
 }
 
 func (m Model) runPrefix(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -2676,12 +2703,15 @@ func (m Model) renderFooter() string {
 	case modeMenu:
 		badge = styleBadgePrefix.Render(" MENU ")
 		body = styleBarMuted.Render(" click or arrows + enter, esc closes")
+		body += m.navigationHint()
 	case modeSettings:
 		badge = styleBadgeInput.Render(" SETTINGS ")
 		body = styleBarMuted.Render(" enter toggles, tab switches section, esc closes")
+		body += m.navigationHint()
 	case modeFind:
 		badge = styleBadgeInput.Render(" FIND ")
 		body = styleBarMuted.Render(" type to filter, arrows select, enter jumps, esc closes")
+		body += m.navigationHint()
 	case modePrefix:
 		badge = styleBadgePrefix.Render(" " + strings.ToUpper(m.prefixTrigger) + " ")
 		body = m.prefixHints(m.width - lipgloss.Width(badge) - lipgloss.Width(right))
@@ -2727,6 +2757,20 @@ func (m Model) renderFooter() string {
 	}
 	gap := m.width - badgeWidth - lipgloss.Width(body) - lipgloss.Width(right)
 	return badge + body + styleBar.Render(strings.Repeat(" ", max(0, gap))) + right
+}
+
+func (m Model) navigationHint() string {
+	var custom []string
+	if key := strings.TrimSpace(m.keyOverrides["navigate-up"]); key != "" {
+		custom = append(custom, key)
+	}
+	if key := strings.TrimSpace(m.keyOverrides["navigate-down"]); key != "" {
+		custom = append(custom, key)
+	}
+	if len(custom) == 0 {
+		return ""
+	}
+	return styleBarText.Render("  " + strings.Join(custom, "/"))
 }
 
 func (m Model) agentSummary() string {

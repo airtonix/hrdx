@@ -30,6 +30,13 @@ func TestBuildPrefixKeysOverride(t *testing.T) {
 	}
 }
 
+func TestBuildPrefixKeysExcludesNavigationOverrides(t *testing.T) {
+	keys := buildPrefixKeys(map[string]string{"navigate-up": "u", "navigate-down": "d"})
+	if keys["u"] != "scroll-up" || keys["d"] != "scroll-down" {
+		t.Fatalf("navigation overrides changed prefix keys: %v", keys)
+	}
+}
+
 func TestBuildPrefixKeysExcludesPrefixTrigger(t *testing.T) {
 	keys := buildPrefixKeys(nil)
 	if keys["ctrl+b"] != "literal" {
@@ -91,18 +98,31 @@ func TestIsSpuriousModifierKey(t *testing.T) {
 func TestLoadKeymap(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, keymapFile),
-		[]byte(`{"find": "f", "bogus": "x"}`), 0o644); err != nil {
+		[]byte(`{"find": "f", "navigate-up": "home", "bogus": "x"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	overrides, problem := loadKeymap(dir)
 	if overrides["find"] != "f" {
 		t.Fatalf("overrides = %v, want find -> f", overrides)
 	}
+	if overrides["navigate-up"] != "home" {
+		t.Fatalf("overrides = %v, want navigate-up -> home", overrides)
+	}
 	if _, ok := overrides["bogus"]; ok {
 		t.Fatal("unknown action must be dropped")
 	}
 	if problem == "" {
 		t.Fatal("unknown action should surface a problem message")
+	}
+}
+
+func TestBuildNavigationKeys(t *testing.T) {
+	keys := buildNavigationKeys(map[string]string{"navigate-up": "home", "navigate-down": "end", "find": "f"})
+	if keys["home"] != "navigate-up" || keys["end"] != "navigate-down" {
+		t.Fatalf("navigation keys = %v, want home/end bindings", keys)
+	}
+	if _, ok := keys["f"]; ok {
+		t.Fatal("non-navigation keys must not be included")
 	}
 }
 
@@ -131,5 +151,38 @@ func TestPrefixHintEntriesUseSpaceSeparator(t *testing.T) {
 				t.Fatalf("hint keys %q contain a slash separator", entry[0])
 			}
 		}
+	}
+}
+
+func TestMenuNavigationKeysDispatch(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	model.openKindPicker("tab", model.currentSpace(), "", rect{x: 1, y: 1})
+	model.menuIndex = 1
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyUp})
+	model = updated.(Model)
+	if model.menuIndex != 0 {
+		t.Fatalf("menuIndex after up = %d, want 0", model.menuIndex)
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	model = updated.(Model)
+	if model.menuIndex != 1 {
+		t.Fatalf("menuIndex after j = %d, want 1", model.menuIndex)
+	}
+
+	model.keyOverrides = map[string]string{"navigate-up": "home", "navigate-down": "end"}
+	model.navKeys = buildNavigationKeys(model.keyOverrides)
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyHome})
+	model = updated.(Model)
+	if model.menuIndex != 0 {
+		t.Fatalf("menuIndex after home = %d, want 0", model.menuIndex)
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyEnd})
+	model = updated.(Model)
+	if model.menuIndex != 1 {
+		t.Fatalf("menuIndex after end = %d, want 1", model.menuIndex)
 	}
 }

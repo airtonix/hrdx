@@ -102,17 +102,19 @@ Panes whose process exits (for example `exit` in a shell) close automatically; t
 
 ### Custom keys
 
-Prefix keys are remappable via a `keys.json` next to the state file (`~/Library/Application Support/hrdx/keys.json` on macOS, `$XDG_CONFIG_HOME/hrdx/keys.json` on Linux, `%AppData%\hrdx\keys.json` on Windows). It maps action names to a single key; an override replaces that action's default keys. The `prefix` action remaps the `ctrl+b` trigger itself, not just an action inside it:
+Keys are configurable via a `keys.json` next to the state file (`~/Library/Application Support/hrdx/keys.json` on macOS, `$XDG_CONFIG_HOME/hrdx/keys.json` on Linux, `%AppData%\hrdx\keys.json` on Windows). It maps action names to a single key. A prefix-action override replaces that action's default keys. The `prefix` action remaps the `ctrl+b` trigger itself, not just an action inside it. `navigate-up` and `navigate-down` add navigation keys for pickers, settings, and find while arrows and j/k remain available:
 
 ```json
 {
   "find": "f",
   "quit": "Q",
-  "agent-cycle": "g"
+  "agent-cycle": "g",
+  "navigate-up": "home",
+  "navigate-down": "end"
 }
 ```
 
-Actions: `prefix`, `literal`, `quit`, `picker-right`, `picker-down`, `agent-right`, `agent-down`, `agent-cycle` (unbound by default), `shell-right`, `shell-down`, `workspace`, `tab-new`, `tab-next`, `tab-prev`, `space-next`, `space-prev`, `pane-next`, `pane-prev`, `find`, `close-pane`, `close-space`, `equalize`, `rename`, `menu`, `settings`, `scroll-up`, `scroll-down`, `live`.
+Actions: `prefix`, `literal`, `quit`, `picker-right`, `picker-down`, `agent-right`, `agent-down`, `agent-cycle` (unbound by default), `shell-right`, `shell-down`, `workspace`, `tab-new`, `tab-next`, `tab-prev`, `space-next`, `space-prev`, `pane-next`, `pane-prev`, `find`, `close-pane`, `close-space`, `equalize`, `rename`, `menu`, `settings`, `scroll-up`, `scroll-down`, `live`, `navigate-up`, `navigate-down`.
 
 ## Mouse
 

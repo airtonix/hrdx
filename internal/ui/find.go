@@ -91,16 +91,28 @@ func (m *Model) jumpTo(chosen findCandidate) {
 
 func (m Model) updateFindKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	candidates := m.findCandidates()
-	switch msg.String() {
-	case "esc":
-		m.closeFind()
-		return m, nil
-	case "up", "ctrl+p":
+	switch m.navigationAction(msg) {
+	case "navigate-up":
 		if len(candidates) > 0 {
 			m.findIndex = (m.findIndex - 1 + len(candidates)) % len(candidates)
 		}
 		return m, nil
-	case "down", "ctrl+n":
+	case "navigate-down":
+		if len(candidates) > 0 {
+			m.findIndex = (m.findIndex + 1) % len(candidates)
+		}
+		return m, nil
+	}
+	switch msg.String() {
+	case "esc":
+		m.closeFind()
+		return m, nil
+	case "ctrl+p":
+		if len(candidates) > 0 {
+			m.findIndex = (m.findIndex - 1 + len(candidates)) % len(candidates)
+		}
+		return m, nil
+	case "ctrl+n":
 		if len(candidates) > 0 {
 			m.findIndex = (m.findIndex + 1) % len(candidates)
 		}

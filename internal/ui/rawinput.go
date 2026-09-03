@@ -9,9 +9,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// Bubble Tea v1 reports kitty-keyboard CSI-u sequences (needed for chords
-// like ctrl+1) as unexported "unknown" messages. rawInputBytes recovers the
-// raw bytes from those messages via reflection.
+// Bubble Tea v1 reports some kitty-keyboard sequences as unexported
+// "unknown" messages. rawInputBytes recovers their bytes via reflection.
 func rawInputBytes(message tea.Msg) ([]byte, bool) {
 	switch fmt.Sprintf("%T", message) {
 	case "tea.unknownCSISequenceMsg":
@@ -34,6 +33,37 @@ const (
 	modAlt   = 2
 	modCtrl  = 4
 )
+
+// parseEnhancedFunctionalKey decodes unmodified functional keys emitted
+// with an explicit modifier parameter by the kitty keyboard protocol.
+func parseEnhancedFunctionalKey(data []byte) (tea.KeyMsg, bool) {
+	var keyType tea.KeyType
+	switch string(data) {
+	case "\x1b[1;1A":
+		keyType = tea.KeyUp
+	case "\x1b[1;1B":
+		keyType = tea.KeyDown
+	case "\x1b[1;1C":
+		keyType = tea.KeyRight
+	case "\x1b[1;1D":
+		keyType = tea.KeyLeft
+	case "\x1b[1;1H":
+		keyType = tea.KeyHome
+	case "\x1b[1;1F":
+		keyType = tea.KeyEnd
+	case "\x1b[2;1~":
+		keyType = tea.KeyInsert
+	case "\x1b[3;1~":
+		keyType = tea.KeyDelete
+	case "\x1b[5;1~":
+		keyType = tea.KeyPgUp
+	case "\x1b[6;1~":
+		keyType = tea.KeyPgDown
+	default:
+		return tea.KeyMsg{}, false
+	}
+	return tea.KeyMsg{Type: keyType}, true
+}
 
 // parseCSIU decodes a kitty keyboard sequence ESC [ code ; mods u.
 // It returns the base codepoint and the modifier bitmask.

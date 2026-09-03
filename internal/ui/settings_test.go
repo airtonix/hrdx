@@ -69,6 +69,26 @@ func TestThemeSettingsScrollAndSelectBundledPreset(t *testing.T) {
 	}
 }
 
+func TestSettingsCustomNavigationKeys(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	model.navKeys = buildNavigationKeys(map[string]string{
+		"navigate-up": "home", "navigate-down": "end",
+	})
+	model.openSettings()
+	model.settingsIndex = 1
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyHome})
+	model = updated.(Model)
+	if model.settingsIndex != 0 {
+		t.Fatalf("settingsIndex after home = %d, want 0", model.settingsIndex)
+	}
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyEnd})
+	model = updated.(Model)
+	if model.settingsIndex != 1 {
+		t.Fatalf("settingsIndex after end = %d, want 1", model.settingsIndex)
+	}
+}
+
 func TestSettingsMouseOutsideCloses(t *testing.T) {
 	model := newTestModel("/tmp/api")
 	model.openSettings()

@@ -261,6 +261,21 @@ func TestFooterShowsAgentSummaryOnRight(t *testing.T) {
 	}
 }
 
+func TestMenuFooterShowsCustomNavigationKeys(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	model.keyOverrides = map[string]string{"navigate-up": "home", "navigate-down": "end"}
+	model.navKeys = buildNavigationKeys(model.keyOverrides)
+	model.openKindPicker("tab", model.currentSpace(), "", rect{x: 1, y: 1})
+
+	footer := model.renderFooter()
+	if !strings.Contains(footer, "click or arrows + enter, esc closes") {
+		t.Fatalf("menu footer lost default hint: %q", footer)
+	}
+	if !strings.Contains(footer, "home/end") {
+		t.Fatalf("menu footer = %q, want custom picker keys", footer)
+	}
+}
+
 func TestFooterInputDoesNotWrapOnNarrowWindow(t *testing.T) {
 	model := newTestModel("/tmp/api")
 	model.width = 45
