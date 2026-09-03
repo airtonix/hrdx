@@ -20,6 +20,7 @@ var defaultPrefixKeys = map[string][]string{
 	"quit":         {"q"},
 	"picker-right": {"c"},
 	"picker-down":  {"C"},
+	"picker-up":    {},
 	"agent-right":  {"a"},
 	"agent-down":   {"A"},
 	"agent-cycle":  {},
@@ -100,4 +101,17 @@ func loadKeymap(dir string) (map[string]string, string) {
 		return overrides, keymapFile + ": unknown actions: " + strings.Join(unknown, ", ")
 	}
 	return overrides, ""
+}
+
+// buildPickerKeys resolves custom picker navigation keys from keys.json.
+// Defaults stay hard-coded so arrows and j/k keep working.
+func buildPickerKeys(overrides map[string]string) map[string]string {
+	keys := map[string]string{}
+	for action, key := range overrides {
+		switch action {
+		case "picker-up", "picker-down":
+			keys[key] = action
+		}
+	}
+	return keys
 }

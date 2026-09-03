@@ -148,6 +148,7 @@ type Model struct {
 	menuIndex     int
 	customMenus   []api.MenuRegister // ephemeral socket API context-menu entries
 	pickItems     []menuItem         // kind picker entries while it is open
+	pickerKeys    map[string]string  // custom picker navigation overrides from keys.json
 	pickAction    string             // "space", "tab", "split-right", "split-down", "settings"
 	pickSpace     *space             // tab target for the picker
 	pickPath      string             // directory for a pending new workspace
@@ -431,7 +432,7 @@ func New(config Config, paths []string, statePath string, saved state.State) Mod
 		wasBusy: map[int]bool{}, soundSeq: map[int]uint64{}, paneAttention: map[int]bool{},
 		soundOn: saved.Sound, status: harnessProblem,
 		soundKind: saved.SoundKind, notifyOn: saved.Notify, themeName: saved.Theme,
-		prefixKeys: buildPrefixKeys(keymapOverrides), keyOverrides: keymapOverrides}
+		prefixKeys: buildPrefixKeys(keymapOverrides), pickerKeys: buildPickerKeys(keymapOverrides), keyOverrides: keymapOverrides}
 	model.prefixTrigger = model.primaryKey("prefix")
 	if statePath != "" {
 		for _, problem := range []string{
@@ -1048,6 +1049,14 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case modeMenu:
 		items := m.menuItems()
+		switch m.pickerKeys[msg.String()] {
+		case "picker-up":
+			m.menuIndex = (m.menuIndex - 1 + len(items)) % len(items)
+			return m, nil
+		case "picker-down":
+			m.menuIndex = (m.menuIndex + 1) % len(items)
+			return m, nil
+		}
 		switch msg.String() {
 		case "esc", "q":
 			m.closeMenu()
@@ -2676,6 +2685,9 @@ func (m Model) renderFooter() string {
 	case modeMenu:
 		badge = styleBadgePrefix.Render(" MENU ")
 		body = styleBarMuted.Render(" click or arrows + enter, esc closes")
+		if hint := m.menuNavigationHint(); hint != "" {
+			body += styleBarText.Render("  " + hint)
+		}
 	case modeSettings:
 		badge = styleBadgeInput.Render(" SETTINGS ")
 		body = styleBarMuted.Render(" enter toggles, tab switches section, esc closes")
@@ -2727,6 +2739,17 @@ func (m Model) renderFooter() string {
 	}
 	gap := m.width - badgeWidth - lipgloss.Width(body) - lipgloss.Width(right)
 	return badge + body + styleBar.Render(strings.Repeat(" ", max(0, gap))) + right
+}
+
+func (m Model) menuNavigationHint() string {
+	var custom []string
+	if key := strings.TrimSpace(m.keyOverrides["picker-up"]); key != "" {
+		custom = append(custom, key)
+	}
+	if key := strings.TrimSpace(m.keyOverrides["picker-down"]); key != "" {
+		custom = append(custom, key)
+	}
+	return strings.Join(custom, "/")
 }
 
 func (m Model) agentSummary() string {

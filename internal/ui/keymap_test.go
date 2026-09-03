@@ -91,18 +91,31 @@ func TestIsSpuriousModifierKey(t *testing.T) {
 func TestLoadKeymap(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, keymapFile),
-		[]byte(`{"find": "f", "bogus": "x"}`), 0o644); err != nil {
+		[]byte(`{"find": "f", "picker-up": "home", "bogus": "x"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	overrides, problem := loadKeymap(dir)
 	if overrides["find"] != "f" {
 		t.Fatalf("overrides = %v, want find -> f", overrides)
 	}
+	if overrides["picker-up"] != "home" {
+		t.Fatalf("overrides = %v, want picker-up -> home", overrides)
+	}
 	if _, ok := overrides["bogus"]; ok {
 		t.Fatal("unknown action must be dropped")
 	}
 	if problem == "" {
 		t.Fatal("unknown action should surface a problem message")
+	}
+}
+
+func TestBuildPickerKeys(t *testing.T) {
+	keys := buildPickerKeys(map[string]string{"picker-up": "home", "picker-down": "end", "find": "f"})
+	if keys["home"] != "picker-up" || keys["end"] != "picker-down" {
+		t.Fatalf("picker keys = %v, want home/end bindings", keys)
+	}
+	if _, ok := keys["f"]; ok {
+		t.Fatal("non-picker keys must not be included")
 	}
 }
 
@@ -131,5 +144,38 @@ func TestPrefixHintEntriesUseSpaceSeparator(t *testing.T) {
 				t.Fatalf("hint keys %q contain a slash separator", entry[0])
 			}
 		}
+	}
+}
+
+func TestMenuPickerKeysDispatch(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	model.openKindPicker("tab", model.currentSpace(), "", rect{x: 1, y: 1})
+	model.menuIndex = 1
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyUp})
+	model = updated.(Model)
+	if model.menuIndex != 0 {
+		t.Fatalf("menuIndex after up = %d, want 0", model.menuIndex)
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	model = updated.(Model)
+	if model.menuIndex != 1 {
+		t.Fatalf("menuIndex after j = %d, want 1", model.menuIndex)
+	}
+
+	model.keyOverrides = map[string]string{"picker-up": "home", "picker-down": "end"}
+	model.pickerKeys = buildPickerKeys(model.keyOverrides)
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyHome})
+	model = updated.(Model)
+	if model.menuIndex != 0 {
+		t.Fatalf("menuIndex after home = %d, want 0", model.menuIndex)
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyEnd})
+	model = updated.(Model)
+	if model.menuIndex != 1 {
+		t.Fatalf("menuIndex after end = %d, want 1", model.menuIndex)
 	}
 }
