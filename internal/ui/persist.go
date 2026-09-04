@@ -7,6 +7,7 @@ func (m *Model) snapshot() state.State {
 	saved := state.State{
 		Selected: m.selected, Sound: m.soundOn, SoundKind: m.soundKind,
 		Notify: m.notifyOn, Theme: m.themeName, DisableAutoCopy: !m.autoCopy,
+		SidebarCollapsed: m.sideCollapsed,
 	}
 	for _, spec := range agentSpecs {
 		if m.disabled[spec.kind] {

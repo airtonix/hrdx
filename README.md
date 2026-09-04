@@ -86,6 +86,7 @@ All keys go to the focused terminal, except the `ctrl+b` prefix (tmux style):
 | `]` or `[` | Next / previous workspace |
 | `tab` or `shift+tab` | Next / previous pane; stays in prefix mode for repeated jumps, `esc` exits |
 | `/` | Fuzzy finder over every workspace, tab, and pane: type to filter, arrows select, enter jumps |
+| `b` | Collapse or expand the workspace sidebar |
 | `r` | Rename the focused pane |
 | `m` | Open the pane context menu |
 | `=` | Equalize all splits |
@@ -109,16 +110,17 @@ Keys are configurable via a `keys.json` next to the state file (`~/Library/Appli
   "find": "f",
   "quit": "Q",
   "agent-cycle": "g",
+  "sidebar-toggle": "B",
   "navigate-up": "home",
   "navigate-down": "end"
 }
 ```
 
-Actions: `prefix`, `literal`, `quit`, `picker-right`, `picker-down`, `agent-right`, `agent-down`, `agent-cycle` (unbound by default), `shell-right`, `shell-down`, `workspace`, `tab-new`, `tab-next`, `tab-prev`, `space-next`, `space-prev`, `pane-next`, `pane-prev`, `find`, `close-pane`, `close-space`, `equalize`, `rename`, `menu`, `settings`, `scroll-up`, `scroll-down`, `live`, `navigate-up`, `navigate-down`.
+Actions: `prefix`, `literal`, `quit`, `picker-right`, `picker-down`, `agent-right`, `agent-down`, `agent-cycle` (unbound by default), `shell-right`, `shell-down`, `workspace`, `tab-new`, `tab-next`, `tab-prev`, `space-next`, `space-prev`, `pane-next`, `pane-prev`, `find`, `sidebar-toggle`, `close-pane`, `close-space`, `equalize`, `rename`, `menu`, `settings`, `scroll-up`, `scroll-down`, `live`, `navigate-up`, `navigate-down`.
 
 ## Mouse
 
-Everything is clickable: workspace, tab, and pane rows in the sidebar, the main tab bar, menus, and the settings entry at the bottom. Drag workspaces to reorder them, drag pane borders to resize, right-click for context menus, and drag with the left button to select text. Completed selections are copied straight to your clipboard by default; turn this off under the terminal tab in settings when you only want the highlight. Wheel events go to the pane under the cursor: agent TUIs scroll themselves, shells scroll their local history, and `shift+pgup` / `shift+pgdn` do the same from the keyboard.
+Everything is clickable: workspace, tab, and pane rows in the sidebar, the collapse arrow beside `WORKSPACES`, the main tab bar, menus, and the settings entry at the bottom. The compact sidebar shortens workspace and branch names after six display cells and pane names after two, hides the `WORKSPACES` heading and new-workspace entry, and shows only the left-aligned expand arrow and settings gear. Drag workspaces to reorder them, drag pane borders to resize, right-click for context menus, and drag with the left button to select text. Completed selections are copied straight to your clipboard by default; turn this off under the terminal tab in settings when you only want the highlight. Wheel events go to the pane under the cursor: agent TUIs scroll themselves, shells scroll their local history, and `shift+pgup` / `shift+pgdn` do the same from the keyboard.
 
 ## Remote and container panes
 
@@ -303,7 +305,7 @@ The notification section of the settings window has two independent toggles for 
 
 Quitting hrdx does not kill your sessions. Pane processes live in a small background process (the session holder) that hrdx starts on demand and talks to over a local socket. Close the TUI, reopen it, and every shell and agent reattaches exactly where it was: running commands keep running, scrollback and screen state are replayed, nothing restarts. The holder is the same `hrdx` binary, uses no resources worth mentioning, and goes away when you kill its sessions.
 
-Workspaces, panes, split layout, ratios, selection, and holder session ids are saved automatically (default: `~/Library/Application Support/hrdx/state.json` on macOS, `$XDG_CONFIG_HOME/hrdx/state.json` on Linux, `%AppData%\hrdx\state.json` on Windows). On the next launch the layout is restored and each pane reattaches to its held session. When a held session is gone (rebooted machine, killed holder), the pane starts fresh instead: shell panes get a new shell, and agent panes relaunch resuming their latest session for that directory via the agent's own session store.
+Workspaces, panes, split layout, ratios, selection, sidebar collapsed state, and holder session ids are saved automatically (default: `~/Library/Application Support/hrdx/state.json` on macOS, `$XDG_CONFIG_HOME/hrdx/state.json` on Linux, `%AppData%\hrdx\state.json` on Windows). On the next launch the layout is restored and each pane reattaches to its held session. When a held session is gone (rebooted machine, killed holder), the pane starts fresh instead: shell panes get a new shell, and agent panes relaunch resuming their latest session for that directory via the agent's own session store.
 
 `--persist=false` disables the holder (panes die with the TUI, like a plain terminal). `--fresh` skips restoring and cleans up now-unreferenced held sessions; `--state ""` disables persistence entirely.
 

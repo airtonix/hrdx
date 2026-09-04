@@ -28,7 +28,10 @@ func contains(values []string, wanted string) bool {
 	return false
 }
 
-const sidebarWidth = 26
+const (
+	sidebarWidth          = 26
+	collapsedSidebarWidth = 12
+)
 
 type inputMode int
 
@@ -171,6 +174,7 @@ type Model struct {
 	completions   []string
 	completion    int
 	sideScroll    int
+	sideCollapsed bool
 	dragSpace     *space            // sidebar workspace being dragged for reordering
 	dragMoved     bool              // the drag moved rows: suppress persist-less release
 	hintScroll    int               // first visible hint in the ctrl+b footer row
@@ -435,7 +439,8 @@ func New(config Config, paths []string, statePath string, saved state.State) Mod
 		soundOn: saved.Sound, status: harnessProblem,
 		soundKind: saved.SoundKind, notifyOn: saved.Notify, themeName: saved.Theme,
 		autoCopy: !saved.DisableAutoCopy, clipboardCopy: copyToClipboard,
-		prefixKeys: buildPrefixKeys(keymapOverrides), navKeys: buildNavigationKeys(keymapOverrides), keyOverrides: keymapOverrides}
+		sideCollapsed: saved.SidebarCollapsed,
+		prefixKeys:    buildPrefixKeys(keymapOverrides), navKeys: buildNavigationKeys(keymapOverrides), keyOverrides: keymapOverrides}
 	model.prefixTrigger = model.primaryKey("prefix")
 	if statePath != "" {
 		for _, problem := range []string{
@@ -708,10 +713,18 @@ func holderSessionMatchesWorkspace(sessions []holder.SessionInfo, session int64,
 	return false
 }
 
+// sidebarContentWidth is the width before the sidebar's right border.
+func (m Model) sidebarContentWidth() int {
+	if m.sideCollapsed {
+		return collapsedSidebarWidth
+	}
+	return sidebarWidth
+}
+
 // terminalArea is the local rect of the pane region (right of the sidebar,
 // below the tab bar, above the footer). Row 0 of the body is the tab bar.
 func (m Model) terminalArea() rect {
-	return rect{0, 0, max(minPaneCols, m.width-sidebarWidth-1), max(minPaneRows, m.height-3)}
+	return rect{0, 0, max(minPaneCols, m.width-m.sidebarContentWidth()-1), max(minPaneRows, m.height-3)}
 }
 
 func (m Model) layoutFor(target *tab) []paneRect {
@@ -1199,9 +1212,9 @@ func (m Model) runPrefix(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.closeAll()
 		return m, tea.Quit
 	case "picker-right":
-		m.openKindPicker("split-right", nil, "", rect{x: sidebarWidth + 2, y: 1})
+		m.openKindPicker("split-right", nil, "", rect{x: m.sidebarContentWidth() + 2, y: 1})
 	case "picker-down":
-		m.openKindPicker("split-down", nil, "", rect{x: sidebarWidth + 2, y: 1})
+		m.openKindPicker("split-down", nil, "", rect{x: m.sidebarContentWidth() + 2, y: 1})
 	case "agent-right":
 		return m.splitCurrent(m.config.DefaultAgent, true)
 	case "agent-down":
@@ -1217,7 +1230,7 @@ func (m Model) runPrefix(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.openNewSpaceInput()
 	case "tab-new":
 		if currentSpace := m.currentSpace(); currentSpace != nil {
-			m.openKindPicker("tab", currentSpace, "", rect{x: sidebarWidth + 2, y: 1})
+			m.openKindPicker("tab", currentSpace, "", rect{x: m.sidebarContentWidth() + 2, y: 1})
 		}
 	case "tab-next":
 		m.selectTab(1)
@@ -1247,6 +1260,8 @@ func (m Model) runPrefix(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "settings":
 		m.openSettings()
+	case "sidebar-toggle":
+		m.toggleSidebar()
 	case "scroll-up":
 		m.scrollCurrent(m.pageStep())
 	case "scroll-down":
@@ -1258,6 +1273,15 @@ func (m Model) runPrefix(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m *Model) toggleSidebar() {
+	m.sideCollapsed = !m.sideCollapsed
+	m.sideScroll = 0
+	for _, currentSpace := range m.spaces {
+		m.resizePanes(currentSpace)
+	}
+	m.persist()
 }
 
 func (m Model) pageStep() int {
@@ -1628,7 +1652,8 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m.updateSettingsMouse(msg)
 	}
 
-	localX := msg.X - sidebarWidth - 1
+	sidebarContentWidth := m.sidebarContentWidth()
+	localX := msg.X - sidebarContentWidth - 1
 	// Body row 0 is the tab bar; panes start one row below.
 	tabRow := msg.Y == 1 && localX >= 0
 	localY := msg.Y - 2
@@ -1699,7 +1724,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.dragSpace != nil {
 		switch msg.Action {
 		case tea.MouseActionMotion:
-			if msg.X > sidebarWidth {
+			if msg.X > sidebarContentWidth {
 				return m, nil
 			}
 			hit := m.sidebarHit(msg.Y - 1)
@@ -1878,7 +1903,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// row per tick: trackpads emit many wheel events per gesture, and the
 	// list is short, so bigger steps feel jumpy compared to terminal
 	// scrollback.
-	if msg.X <= sidebarWidth && (msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown) {
+	if msg.X <= sidebarContentWidth && (msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown) {
 		delta := -1
 		if msg.Button == tea.MouseButtonWheelDown {
 			delta = 1
@@ -1905,6 +1930,10 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	// The sidebar starts at body row 0 (screen row 1).
+	if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress && m.sidebarToggleHit(msg.X, msg.Y-1) {
+		m.toggleSidebar()
+		return m, nil
+	}
 	hit := m.sidebarHit(msg.Y - 1)
 	switch hit.kind {
 	case "space":
@@ -2099,10 +2128,48 @@ func sidebarPaneState(currentPane *pane) string {
 	}
 }
 
+func compactSidebarName(value string, width int) string {
+	value = strings.ReplaceAll(value, "\n", " ")
+	if runewidth.StringWidth(value) <= width {
+		return value
+	}
+	return runewidth.Truncate(value, width, "") + "..."
+}
+
+func (m Model) sidebarHeaderRow() string {
+	width := m.sidebarContentWidth()
+	arrow := "←"
+	label := " " + styleSection.Render("WORKSPACES")
+	left := max(0, width-lipgloss.Width(label)-lipgloss.Width(arrow)-1)
+	if m.sideCollapsed {
+		arrow = "→"
+		label = ""
+		left = 1
+	}
+	right := max(0, width-lipgloss.Width(label)-left-lipgloss.Width(arrow))
+	return label + strings.Repeat(" ", left) + styleNewButton.Render(arrow) + strings.Repeat(" ", right)
+}
+
+func (m Model) sidebarToggleHit(x, y int) bool {
+	left := m.sidebarContentWidth() - 2
+	if m.sideCollapsed {
+		left = 1
+	}
+	return y == 1 && x == left
+}
+
+func (m Model) sidebarSettingsRow() string {
+	if m.sideCollapsed {
+		return " " + stylePaneDim.Render("⚙")
+	}
+	return " " + stylePaneDim.Render("⚙  settings")
+}
+
 func (m Model) sidebarRows() []sidebarRow {
+	width := m.sidebarContentWidth()
 	rows := []sidebarRow{
 		{},
-		{label: " " + styleSection.Render("WORKSPACES")},
+		{label: m.sidebarHeaderRow()},
 		{},
 	}
 
@@ -2110,12 +2177,16 @@ func (m Model) sidebarRows() []sidebarRow {
 	// This keeps every pane icon aligned, including panes in workspaces that
 	// only have one tab. Named tabs widen the shared column for all rows.
 	tabNameWidth := 0
+	tabNameLimit := 6
+	if m.sideCollapsed {
+		tabNameLimit = 1
+	}
 	for _, currentSpace := range m.spaces {
 		if len(currentSpace.tabs) <= 1 {
 			continue
 		}
 		for tabIndex, currentTab := range currentSpace.tabs {
-			name := truncate(tabDisplayName(currentTab, tabIndex), 6)
+			name := truncate(tabDisplayName(currentTab, tabIndex), tabNameLimit)
 			tabNameWidth = max(tabNameWidth, lipgloss.Width(name))
 		}
 	}
@@ -2123,7 +2194,7 @@ func (m Model) sidebarRows() []sidebarRow {
 	for spaceIndex, currentSpace := range m.spaces {
 		if spaceIndex > 0 {
 			rows = append(rows, sidebarRow{
-				label: " " + styleDivider.Render(strings.Repeat("─", sidebarWidth-2)),
+				label: " " + styleDivider.Render(strings.Repeat("─", width-2)),
 				kind:  "divider", space: spaceIndex, tab: -1, pane: -1,
 			})
 		}
@@ -2131,7 +2202,11 @@ func (m Model) sidebarRows() []sidebarRow {
 		if spaceIndex == m.selected {
 			rail = styleSpaceSel.Render("▍")
 		}
-		label := rail + styleSpaceDim.Render(truncate(currentSpace.name, sidebarWidth-3))
+		spaceName := truncate(currentSpace.name, width-3)
+		if m.sideCollapsed {
+			spaceName = compactSidebarName(currentSpace.name, 6)
+		}
+		label := rail + styleSpaceDim.Render(spaceName)
 		rows = append(rows, sidebarRow{
 			label: label,
 			kind:  "space", space: spaceIndex, tab: -1, pane: -1,
@@ -2139,12 +2214,12 @@ func (m Model) sidebarRows() []sidebarRow {
 		if branch := m.gitBranch(currentSpace.cwd); branch.value != "" {
 			suffixWidth := 0
 			suffix := ""
-			if branch.ahead > 0 {
+			if branch.ahead > 0 && !m.sideCollapsed {
 				text := fmt.Sprintf(" ↑%d", branch.ahead)
 				suffix += styleDotOn.Render(text)
 				suffixWidth += lipgloss.Width(text)
 			}
-			if branch.behind > 0 {
+			if branch.behind > 0 && !m.sideCollapsed {
 				text := fmt.Sprintf(" ↓%d", branch.behind)
 				suffix += lipgloss.NewStyle().Foreground(colorAlt).Render(text)
 				suffixWidth += lipgloss.Width(text)
@@ -2153,8 +2228,12 @@ func (m Model) sidebarRows() []sidebarRow {
 			if spaceIndex == m.selected {
 				branchStyle = styleSpaceSel
 			}
+			branchName := truncate(branch.value, width-3-suffixWidth)
+			if m.sideCollapsed {
+				branchName = compactSidebarName(branch.value, 6)
+			}
 			rows = append(rows, sidebarRow{
-				label: rail + branchStyle.Render(truncate(branch.value, sidebarWidth-3-suffixWidth)) + suffix,
+				label: rail + branchStyle.Render(branchName) + suffix,
 				kind:  "space", space: spaceIndex, tab: -1, pane: -1,
 			})
 		}
@@ -2162,10 +2241,14 @@ func (m Model) sidebarRows() []sidebarRow {
 		showTabs := len(currentSpace.tabs) > 1
 		for tabIndex, currentTab := range currentSpace.tabs {
 			paneIndent := rail + "  "
-			paneNameWidth := sidebarWidth - 6
+			paneNameWidth := width - 6
 			if tabNameWidth > 0 {
-				paneIndent = rail + strings.Repeat(" ", tabNameWidth+3)
-				paneNameWidth = sidebarWidth - tabNameWidth - 7
+				indentWidth := tabNameWidth + 3
+				if m.sideCollapsed {
+					indentWidth--
+				}
+				paneIndent = rail + strings.Repeat(" ", indentWidth)
+				paneNameWidth = width - tabNameWidth - 7
 			}
 
 			shownPanes := 0
@@ -2177,11 +2260,18 @@ func (m Model) sidebarRows() []sidebarRow {
 				if showTabs && shownPanes == 0 {
 					tabStyle := stylePaneDim
 					tabMarker := "  "
-					if spaceIndex == m.selected && tabIndex == currentSpace.active {
+					activeTab := spaceIndex == m.selected && tabIndex == currentSpace.active
+					if activeTab {
 						tabStyle = styleSpaceSel
 						tabMarker = styleSpaceSel.Render("▸") + " "
 					}
-					tabName := truncate(tabDisplayName(currentTab, tabIndex), 6)
+					if m.sideCollapsed {
+						tabMarker = " "
+						if activeTab {
+							tabMarker = styleSpaceSel.Render("▸")
+						}
+					}
+					tabName := truncate(tabDisplayName(currentTab, tabIndex), tabNameLimit)
 					tabPadding := strings.Repeat(" ", tabNameWidth-lipgloss.Width(tabName))
 					rowIndent = rail + tabMarker + tabStyle.Render(tabName) + tabPadding + " "
 				}
@@ -2189,12 +2279,18 @@ func (m Model) sidebarRows() []sidebarRow {
 					tabIndex == currentSpace.active &&
 					paneIndex == currentTab.selected
 				state := sidebarPaneState(currentPane)
+				if m.sideCollapsed {
+					state = ""
+				}
 				stateWidth := lipgloss.Width(state)
 				if state != "" {
 					state = " " + state
 					stateWidth++
 				}
 				name := truncate(m.paneDisplayName(currentPane), paneNameWidth-stateWidth)
+				if m.sideCollapsed {
+					name = compactSidebarName(m.paneDisplayName(currentPane), 2)
+				}
 				nameStyle := stylePaneDim
 				if currentPane.running {
 					nameStyle = stylePaneRun
@@ -2203,8 +2299,12 @@ func (m Model) sidebarRows() []sidebarRow {
 					nameStyle = stylePaneSel
 				}
 				nameLabel := nameStyle.Render(name)
+				trailing := ""
+				if m.sideCollapsed {
+					trailing = " "
+				}
 				rows = append(rows, sidebarRow{
-					label: rowIndent + m.sidebarPaneIcon(currentPane) + nameLabel + state,
+					label: rowIndent + m.sidebarPaneIcon(currentPane) + nameLabel + state + trailing,
 					kind:  "pane", space: spaceIndex, tab: tabIndex, pane: paneIndex,
 				})
 				shownPanes++
@@ -2212,10 +2312,12 @@ func (m Model) sidebarRows() []sidebarRow {
 		}
 	}
 
-	rows = append(rows,
-		sidebarRow{},
-		sidebarRow{label: " " + styleNewButton.Render("+  new workspace"), kind: "new", space: -1, tab: -1, pane: -1},
-	)
+	if !m.sideCollapsed {
+		rows = append(rows,
+			sidebarRow{},
+			sidebarRow{label: " " + styleNewButton.Render("+  new workspace"), kind: "new", space: -1, tab: -1, pane: -1},
+		)
+	}
 	return rows
 }
 
@@ -2304,7 +2406,7 @@ func (m Model) publishCursor() {
 				break
 			}
 			// Screen: sidebar plus border to the left, header and tab bar above.
-			m.cursorSink.Set(sidebarWidth+1+inner.x+x, 2+inner.y+y, true)
+			m.cursorSink.Set(m.sidebarContentWidth()+1+inner.x+x, 2+inner.y+y, true)
 			return
 		}
 	case modeNewSpace, modeRename:
@@ -2369,7 +2471,7 @@ func (m *Model) tabHit(target *space, x int) (index int, isNew bool) {
 
 func (m Model) renderTabBar() string {
 	currentSpace := m.currentSpace()
-	width := max(1, m.width-sidebarWidth-1)
+	width := max(1, m.width-m.sidebarContentWidth()-1)
 	if currentSpace == nil {
 		return styleTabBar.Render(strings.Repeat(" ", width))
 	}
@@ -2443,10 +2545,10 @@ func (m Model) renderSidebar() string {
 	// (●○↑↓), U+2699 is uncommon enough that some fonts (Windows
 	// Terminal's default among them) substitute a wider fallback glyph
 	// for it, which then overlaps a single following space.
-	rows = append(rows, " "+stylePaneDim.Render("⚙  settings"), "")
+	rows = append(rows, m.sidebarSettingsRow(), "")
 
 	return lipgloss.NewStyle().
-		Width(sidebarWidth).
+		Width(m.sidebarContentWidth()).
 		Height(height).
 		Border(lipgloss.ThickBorder(), false, true, false, false).
 		BorderForeground(colorFaint).
@@ -2837,6 +2939,7 @@ func (m Model) prefixHintEntries() [][2]string {
 		{keys("find"), "find"},
 		{keys("rename"), "rename"},
 		{keys("equalize"), "equal"},
+		{keys("sidebar-toggle"), "sidebar"},
 		{keys("scroll-up", "scroll-down"), "scroll"},
 		{keys("close-pane", "close-space"), "close"},
 		{keys("settings"), "settings"},
