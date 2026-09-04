@@ -32,31 +32,15 @@ type themeColors struct {
 	Ink    json.RawMessage `json:"ink,omitempty"`    // text on accent backgrounds
 }
 
-type themeIcons struct {
-	SidebarCollapse string `json:"sidebar_collapse,omitempty"`
-	SidebarExpand   string `json:"sidebar_expand,omitempty"`
-}
-
 // themeFile is one theme JSON document.
 type themeFile struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description,omitempty"`
 	Colors      themeColors `json:"colors,omitempty"`
-	Icons       themeIcons  `json:"icons,omitempty"`
 }
 
 // defaultThemeName identifies the original built-in theme.
 const defaultThemeName = "default"
-
-const (
-	defaultSidebarCollapseIcon = "‹"
-	defaultSidebarExpandIcon   = "›"
-)
-
-var (
-	sidebarCollapseIcon = defaultSidebarCollapseIcon
-	sidebarExpandIcon   = defaultSidebarExpandIcon
-)
 
 // themeRegistry holds the discovered user themes.
 var themeRegistry struct {
@@ -167,14 +151,6 @@ func parseThemeColor(raw json.RawMessage) (lipgloss.Color, bool) {
 	return "", false
 }
 
-func parseThemeIcon(value string) (string, bool) {
-	value = strings.TrimSpace(value)
-	if value == "" || lipgloss.Width(value) > 2 {
-		return "", false
-	}
-	return value, true
-}
-
 // defaultColors is the built-in theme, matching hrdx's original look.
 func defaultColors() map[string]lipgloss.Color {
 	return map[string]lipgloss.Color{
@@ -195,7 +171,6 @@ func defaultColors() map[string]lipgloss.Color {
 // theme's overrides on top. Unknown names fall back to the default.
 func applyTheme(name string) {
 	palette := defaultColors()
-	icons := themeIcons{SidebarCollapse: defaultSidebarCollapseIcon, SidebarExpand: defaultSidebarExpandIcon}
 	if preset, ok := builtInTheme(name); ok {
 		for key, color := range preset.colors {
 			palette[key] = color
@@ -222,12 +197,6 @@ func applyTheme(name string) {
 					palette[key] = color
 				}
 			}
-			if icon, ok := parseThemeIcon(loaded.Icons.SidebarCollapse); ok {
-				icons.SidebarCollapse = icon
-			}
-			if icon, ok := parseThemeIcon(loaded.Icons.SidebarExpand); ok {
-				icons.SidebarExpand = icon
-			}
 		}
 	}
 
@@ -241,7 +210,5 @@ func applyTheme(name string) {
 	colorBarBg = palette["bar_bg"]
 	colorBarFg = palette["bar_fg"]
 	colorInk = palette["ink"]
-	sidebarCollapseIcon = icons.SidebarCollapse
-	sidebarExpandIcon = icons.SidebarExpand
 	rebuildStyles()
 }

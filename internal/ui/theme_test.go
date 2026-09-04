@@ -31,8 +31,7 @@ func TestLoadThemesAndApply(t *testing.T) {
 	dir := t.TempDir()
 	writeTheme(t, dir, "neon.json", `{
 		"name": "neon",
-		"colors": { "accent": 201, "bar_bg": "#101010" },
-		"icons": { "sidebar_collapse": "◂", "sidebar_expand": "▸" }
+		"colors": { "accent": 201, "bar_bg": "#101010" }
 	}`)
 
 	if problem := loadThemes(dir); problem != "" {
@@ -50,9 +49,6 @@ func TestLoadThemesAndApply(t *testing.T) {
 	if colorBarBg != lipgloss.Color("#101010") {
 		t.Fatalf("bar_bg = %q, want #101010", colorBarBg)
 	}
-	if sidebarCollapseIcon != "◂" || sidebarExpandIcon != "▸" {
-		t.Fatalf("sidebar icons = %q/%q, want ◂/▸", sidebarCollapseIcon, sidebarExpandIcon)
-	}
 	// Unset values keep the default.
 	if colorGood != lipgloss.Color("78") {
 		t.Fatalf("good = %q, want default 78", colorGood)
@@ -61,9 +57,6 @@ func TestLoadThemesAndApply(t *testing.T) {
 	applyTheme(defaultThemeName)
 	if colorAccent != lipgloss.Color("81") {
 		t.Fatalf("accent after reset = %q, want 81", colorAccent)
-	}
-	if sidebarCollapseIcon != defaultSidebarCollapseIcon || sidebarExpandIcon != defaultSidebarExpandIcon {
-		t.Fatalf("sidebar icons after reset = %q/%q, want defaults", sidebarCollapseIcon, sidebarExpandIcon)
 	}
 }
 
@@ -109,21 +102,6 @@ func TestApplyUnknownThemeFallsBack(t *testing.T) {
 	applyTheme("nope")
 	if colorAccent != lipgloss.Color("81") {
 		t.Fatalf("accent = %q, want default", colorAccent)
-	}
-}
-
-func TestParseThemeIcon(t *testing.T) {
-	if icon, ok := parseThemeIcon("◂"); !ok || icon != "◂" {
-		t.Fatalf("single-cell icon = %q/%v, want ◂/true", icon, ok)
-	}
-	if icon, ok := parseThemeIcon("<<"); !ok || icon != "<<" {
-		t.Fatalf("two-cell icon = %q/%v, want <</true", icon, ok)
-	}
-	if _, ok := parseThemeIcon("wide"); ok {
-		t.Fatal("wide icon accepted")
-	}
-	if _, ok := parseThemeIcon(" "); ok {
-		t.Fatal("blank icon accepted")
 	}
 }
 

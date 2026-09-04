@@ -326,71 +326,64 @@ func TestSidebarOverflowMarkersUseIconSpacing(t *testing.T) {
 	}
 }
 
-func TestSidebarToggleCollapsesAndPreservesSelection(t *testing.T) {
-	model := newTestModel("/tmp/api")
+func TestCollapsedSidebarKeepsCompactNames(t *testing.T) {
+	model := newTestModel("/tmp/long-workspace")
+	model.branches["/tmp/long-workspace"] = branchInfo{value: "feature/sidebar", checked: time.Now()}
 	currentSpace := model.spaces[0]
-	model.addPane(currentSpace, "shell", true)
+	currentSpace.tabs[0].panes[0].name = "important agent"
+	currentSpace.tabs[0].name = "long tab name"
 	model.addTab(currentSpace, "shell")
-	selectedPane := model.currentPane()
-	wide := model.terminalArea().w
+	model.sideCollapsed = true
 
-	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlB})
-	model = updated.(Model)
-	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
-	model = updated.(Model)
-
-	if !model.sideCollapsed {
-		t.Fatal("sidebar should be collapsed after prefix b")
-	}
-	if model.currentPane() != selectedPane || model.selected != 0 {
-		t.Fatal("collapsing sidebar changed the current selection")
-	}
-	if got, want := model.terminalArea().w, wide+(sidebarWidth-collapsedSidebarWidth); got != want {
-		t.Fatalf("terminal width = %d, want %d", got, want)
-	}
 	rows := model.sidebarRows()
-	if rows[2].kind != "space" || !strings.Contains(rows[2].label, "a") {
-		t.Fatalf("collapsed workspace row = %+v, want initial", rows[2])
+	if got := rows[1].label; strings.Contains(got, "WORKSPACES") || !strings.Contains(got, "→") {
+		t.Fatalf("collapsed header = %q, want only the expand arrow", got)
 	}
-	dotColumn := -1
+	if !model.sidebarToggleHit(1, 1) || model.sidebarToggleHit(collapsedSidebarWidth-2, 1) {
+		t.Fatal("collapsed expand arrow is not aligned with workspace names")
+	}
+	if got := rows[3].label; !strings.Contains(got, "long-w...") {
+		t.Fatalf("collapsed workspace row = %q, want six characters and an ellipsis", got)
+	}
+	if got := rows[4].label; !strings.Contains(got, "featur...") {
+		t.Fatalf("collapsed branch row = %q, want six characters and an ellipsis", got)
+	}
+	if got := rows[5].label; strings.Contains(got, "important") || strings.Contains(got, "agent") {
+		t.Fatalf("collapsed pane row exposes the full pane name: %q", got)
+	} else if !strings.Contains(got, "○") || !strings.Contains(got, "im...") || !strings.HasSuffix(got, " ") {
+		t.Fatalf("collapsed pane row = %q, want state icon, two-character name, and trailing space", got)
+	}
 	for _, row := range rows {
-		if row.kind != "pane" {
-			continue
+		if row.kind == "new" || strings.Contains(row.label, "new workspace") {
+			t.Fatalf("collapsed sidebar exposes new workspace row: %+v", row)
 		}
-		dot := strings.Index(row.label, "○")
-		if dot < 0 {
-			dot = strings.Index(row.label, "●")
-		}
-		if dot < 0 {
-			t.Fatalf("collapsed pane row lacks activity dot: %+v", row)
-		}
-		column := lipgloss.Width(row.label[:dot])
-		if dotColumn < 0 {
-			dotColumn = column
-		} else if column != dotColumn {
-			t.Fatalf("collapsed pane dot column = %d, want %d in row %q", column, dotColumn, row.label)
+		if width := lipgloss.Width(row.label); width > collapsedSidebarWidth {
+			t.Fatalf("collapsed sidebar row width = %d, want at most %d: %q", width, collapsedSidebarWidth, row.label)
 		}
 	}
-	if !strings.Contains(rows[5].label, "▸") || !strings.Contains(rows[5].label, "2") || strings.Contains(rows[3].label, "▸") {
-		t.Fatalf("collapsed tab rows = %q / %q, want reserved marker before tab number", rows[3].label, rows[5].label)
+	sidebar := model.renderSidebar()
+	if strings.Contains(sidebar, "settings") || !strings.Contains(sidebar, "⚙") {
+		t.Fatalf("collapsed settings row = %q, want gear without label", sidebar)
 	}
 }
 
 func TestMouseToggleCollapsesAndExpandsSidebar(t *testing.T) {
 	model := newTestModel("/tmp/api")
+	wide := model.terminalArea().w
+
 	updated, _ := model.updateMouse(tea.MouseMsg{X: sidebarWidth - 2, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
 	got := updated.(Model)
 	if !got.sideCollapsed {
-		t.Fatal("clicking the expanded sidebar toggle should collapse it")
+		t.Fatal("clicking the sidebar arrow should collapse it")
 	}
-	if hit := got.sidebarHit(got.height - 4); hit.kind != "settings" {
-		t.Fatalf("settings hit = %+v, want settings to remain on the bottom row", hit)
+	if got.terminalArea().w != wide+sidebarWidth-collapsedSidebarWidth {
+		t.Fatalf("collapsed terminal width = %d, want %d", got.terminalArea().w, wide+sidebarWidth-collapsedSidebarWidth)
 	}
 
-	updated, _ = got.updateMouse(tea.MouseMsg{X: collapsedSidebarWidth - 2, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	updated, _ = got.updateMouse(tea.MouseMsg{X: 1, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
 	got = updated.(Model)
 	if got.sideCollapsed {
-		t.Fatal("clicking the collapsed sidebar toggle should expand it")
+		t.Fatal("clicking the sidebar arrow should expand it")
 	}
 }
 

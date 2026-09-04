@@ -68,9 +68,12 @@ type State struct {
 	// Theme selects the color theme: "default" or a themes/*.json name.
 	Theme string `json:"theme,omitempty"`
 
-	// SidebarCollapsed remembers whether the workspace sidebar is in its
-	// compact form. Omitted in older state files, where the full sidebar
-	// remains the zero-value default.
+	// DisableAutoCopy prevents completed text selections from being copied to
+	// the system clipboard. Its zero value preserves the legacy auto-copy behavior.
+	DisableAutoCopy bool `json:"disable_auto_copy,omitempty"`
+
+	// SidebarCollapsed remembers whether the workspace sidebar is compact.
+	// Its zero value keeps older state files expanded.
 	SidebarCollapsed bool `json:"sidebar_collapsed,omitempty"`
 }
 

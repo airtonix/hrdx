@@ -12,7 +12,7 @@ func TestBuildPrefixKeysDefaults(t *testing.T) {
 	keys := buildPrefixKeys(nil)
 	for key, action := range map[string]string{
 		"c": "picker-right", "a": "agent-right", "A": "agent-down",
-		"/": "find", "tab": "pane-next", "q": "quit",
+		"/": "find", "b": "sidebar-toggle", "tab": "pane-next", "q": "quit",
 	} {
 		if keys[key] != action {
 			t.Fatalf("keys[%q] = %q, want %q", key, keys[key], action)
