@@ -52,9 +52,6 @@ func gitWorktreeRoot(cwd string) string {
 		return ""
 	}
 	root := filepath.Dir(gitDir)
-	if resolved, err := filepath.EvalSymlinks(root); err == nil {
-		root = resolved
-	}
 	return filepath.Clean(root)
 }
 
@@ -109,7 +106,7 @@ func (m Model) openWorktreePicker(base *space, at rect) (tea.Model, tea.Cmd) {
 	for _, worktree := range worktrees {
 		alreadyOpen := false
 		for _, current := range m.spaces {
-			if filepath.Clean(current.cwd) == filepath.Clean(worktree.path) {
+			if samePath(current.cwd, worktree.path) {
 				alreadyOpen = true
 				break
 			}
@@ -136,6 +133,12 @@ const defaultWorktreeCommand = `git worktree add {{path}} -b {{name}}`
 
 func shellQuote(value string) string {
 	if runtime.GOOS == "windows" {
+		// cmd.exe does not concatenate quoted and unquoted fragments, so only
+		// quote values that need protection. This keeps ../custom-{{name}} a
+		// valid single argument while still handling paths with spaces.
+		if !strings.ContainsAny(value, " \t&()[]{}^=;!'+,`~") {
+			return value
+		}
 		return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"`
 	}
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
@@ -157,7 +160,7 @@ func runShell(cwd, command string) ([]byte, error) {
 		if shell == "" {
 			shell = "cmd.exe"
 		}
-		cmd := exec.CommandContext(ctx, shell, "/d", "/s", "/c", command)
+		cmd := exec.CommandContext(ctx, shell, "/d", "/c", command)
 		cmd.Dir = cwd
 		return cmd.CombinedOutput()
 	}
@@ -243,7 +246,11 @@ func samePath(a, b string) bool {
 			}
 		}
 	}
-	return filepath.Clean(a) == filepath.Clean(b)
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 func (m Model) runWorktreePick(path string) (tea.Model, tea.Cmd) {

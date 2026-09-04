@@ -503,9 +503,6 @@ func (m *Model) addSpace(path string) *space {
 }
 
 func (m *Model) addSpaceKind(path, kind string) *space {
-	if absolute, err := filepath.Abs(path); err == nil {
-		path = absolute
-	}
 	newSpace := &space{name: filepath.Base(path), cwd: path, tabs: []*tab{{}}}
 	m.spaces = append(m.spaces, newSpace)
 	m.addPane(newSpace, kind, true)
