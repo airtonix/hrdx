@@ -9,6 +9,16 @@ import (
 	"github.com/patriceckhart/hrdx/internal/state"
 )
 
+func TestInterpolateWorktreeCommandQuotesValues(t *testing.T) {
+	got := interpolateWorktreeCommand("git worktree add {{path}} {{name}}", map[string]string{
+		"path": "/tmp/a path",
+		"name": "feature/x",
+	})
+	if !strings.Contains(got, "'/tmp/a path'") || !strings.Contains(got, "'feature/x'") {
+		t.Fatalf("command = %q", got)
+	}
+}
+
 func TestSidebarGroupsMainAndLinkedWorktree(t *testing.T) {
 	repo := t.TempDir()
 	git(t, repo, "init")
@@ -60,6 +70,23 @@ func TestWorktreePickerFiltersOpenWorktrees(t *testing.T) {
 	picker := opened.(Model)
 	if len(picker.pickItems) != 1 || !strings.Contains(picker.pickItems[0].label, "closed") {
 		t.Fatalf("picker items = %+v, want only closed worktree", picker.pickItems)
+	}
+}
+
+func TestCreateWorktreeUsesDefaultCommand(t *testing.T) {
+	repo := t.TempDir()
+	git(t, repo, "init")
+	git(t, repo, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "init")
+	model := Model{}
+	path, err := model.createWorktree(&space{cwd: repo}, "feature")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != filepath.Join(repo, ".worktrees", "feature") {
+		t.Fatalf("path = %q", path)
+	}
+	if got := readGitBranch(path); got != "feature" {
+		t.Fatalf("branch = %q, want feature", got)
 	}
 }
 

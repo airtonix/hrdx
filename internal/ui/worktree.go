@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -125,6 +126,96 @@ func (m Model) openWorktreePicker(base *space, at rect) (tea.Model, tea.Cmd) {
 	m.pickItems, m.pickAction, m.pickSpace = items, "worktree-open", base
 	m.openMenuBox(at)
 	return m, nil
+}
+
+const defaultWorktreeCommand = `git worktree add {{base_worktree_path}}/.worktrees/{{name}} -b {{name}}`
+
+func shellQuote(value string) string {
+	if runtime.GOOS == "windows" {
+		return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"`
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func interpolateWorktreeCommand(command string, values map[string]string) string {
+	for key, value := range values {
+		command = strings.ReplaceAll(command, "{{"+key+"}}", shellQuote(value))
+		command = strings.ReplaceAll(command, "{"+key+"}", shellQuote(value))
+	}
+	return command
+}
+
+func runShell(cwd, command string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if runtime.GOOS == "windows" {
+		shell := os.Getenv("COMSPEC")
+		if shell == "" {
+			shell = "cmd.exe"
+		}
+		cmd := exec.CommandContext(ctx, shell, "/d", "/s", "/c", command)
+		cmd.Dir = cwd
+		return cmd.CombinedOutput()
+	}
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd.Dir = cwd
+	return cmd.CombinedOutput()
+}
+
+func (m Model) worktreeCommand() string {
+	if strings.TrimSpace(m.config.WorktreeCommand) == "" {
+		return defaultWorktreeCommand
+	}
+	return m.config.WorktreeCommand
+}
+
+func (m Model) createWorktree(base *space, name string) (string, error) {
+	if base == nil || gitWorktreeRoot(base.cwd) == "" {
+		return "", fmt.Errorf("workspace is not a Git worktree")
+	}
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\\`) {
+		return "", fmt.Errorf("worktree name must be one path component")
+	}
+	root := gitWorktreeRoot(base.cwd)
+	path := filepath.Join(root, ".worktrees", name)
+	command := interpolateWorktreeCommand(m.worktreeCommand(), map[string]string{
+		"name": name, "path": path, "base": base.cwd, "base_worktree_path": root,
+	})
+	output, err := runShell(base.cwd, command)
+	if err != nil {
+		detail := strings.TrimSpace(string(output))
+		if detail == "" {
+			detail = err.Error()
+		}
+		return "", fmt.Errorf("create worktree: %s", detail)
+	}
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	}
+	worktrees, listErr := listWorktrees(base.cwd)
+	if listErr == nil {
+		for _, worktree := range worktrees {
+			if samePath(worktree.path, path) {
+				return worktree.path, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("create worktree: command did not create %s", path)
+}
+
+func samePath(a, b string) bool {
+	for _, path := range []string{a, b} {
+		if absolute, err := filepath.Abs(path); err == nil {
+			if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
+				if path == a {
+					a = resolved
+				} else {
+					b = resolved
+				}
+			}
+		}
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
 }
 
 func (m Model) runWorktreePick(path string) (tea.Model, tea.Cmd) {

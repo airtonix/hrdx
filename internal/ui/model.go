@@ -69,18 +69,20 @@ var tabMenuItems = []menuItem{
 var spaceMenuItems = []menuItem{
 	{"Rename", "space-rename"},
 	{"Open worktree", "space-worktree"},
+	{"Create worktree", "worktree_create"},
 	{"Close", "space-close"},
 	{"New tab", "space-tab"},
 }
 
 // Config carries the launch settings for agent panes.
 type Config struct {
-	DefaultAgent string            // agent kind used for new panes and splits
-	AgentBins    map[string]string // per-agent binary overrides
-	ZotArgs      []string          // extra args passed to zot panes only
-	Shell        string
-	Version      string // current binary version for the update check
-	CacheDir     string // directory for the update check cache
+	DefaultAgent    string            // agent kind used for new panes and splits
+	AgentBins       map[string]string // per-agent binary overrides
+	ZotArgs         []string          // extra args passed to zot panes only
+	Shell           string
+	Version         string // current binary version for the update check
+	CacheDir        string // directory for the update check cache
+	WorktreeCommand string
 }
 
 type floatPlacement struct {
@@ -156,6 +158,8 @@ type Model struct {
 	pickAction    string             // "space", "tab", "split-right", "split-down", "settings"
 	pickSpace     *space             // tab target for the picker
 	pickPath      string             // directory for a pending new workspace
+	worktreeBase  *space             // base workspace for a pending worktree create
+	worktreeEdit  bool               // editing the worktree command setting
 	renamePane    *pane
 	renameTab     *tab
 	renameSpace   *space
@@ -429,6 +433,9 @@ func New(config Config, paths []string, statePath string, saved state.State) Mod
 	}
 	if !isAgentKind(config.DefaultAgent) {
 		config.DefaultAgent = "zot"
+	}
+	if config.WorktreeCommand == "" {
+		config.WorktreeCommand = saved.WorktreeCommand
 	}
 	input := textinput.New()
 	input.Placeholder = "directory (e.g. ~/Developer/api)"
@@ -1102,7 +1109,13 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modeNewSpace:
 		switch msg.String() {
 		case "esc":
-			m.mode = modeTerminal
+			if m.worktreeEdit {
+				m.mode = modeSettings
+			} else {
+				m.mode = modeTerminal
+			}
+			m.worktreeBase = nil
+			m.worktreeEdit = false
 			m.clearCompletions()
 			m.input.Blur()
 			return m, nil
@@ -1115,6 +1128,36 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "enter":
 			value := strings.TrimSpace(m.input.Value())
+			if m.worktreeEdit {
+				if value != "" {
+					m.config.WorktreeCommand = value
+					m.persist()
+				}
+				m.mode = modeSettings
+				m.worktreeEdit = false
+				m.input.Blur()
+				return m, nil
+			}
+			if m.worktreeBase != nil {
+				if value == "" {
+					m.mode = modeTerminal
+					m.worktreeBase = nil
+					m.input.Blur()
+					return m, nil
+				}
+				path, err := m.createWorktree(m.worktreeBase, value)
+				if err != nil {
+					return m, m.flashStatus(err.Error())
+				}
+				m.mode = modeTerminal
+				m.worktreeBase = nil
+				m.input.Blur()
+				m.input.SetValue("")
+				newSpace := m.addSpaceKind(path, m.config.DefaultAgent)
+				m.selected = len(m.spaces) - 1
+				m.persist()
+				return m, m.startPane(newSpace, newSpace.tab().panes[0])
+			}
 			if value == "" {
 				m.mode = modeTerminal
 				m.clearCompletions()
@@ -1234,6 +1277,10 @@ func (m Model) runPrefix(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.openNewSpaceInput()
 	case "worktree-add":
 		return m.openWorktreePicker(m.currentSpace(), rect{x: m.sidebarContentWidth() + 2, y: 1})
+	case "worktree_open":
+		return m.openWorktreePicker(m.currentSpace(), rect{x: m.sidebarContentWidth() + 2, y: 1})
+	case "worktree_create":
+		return m.openWorktreeCreateInput(m.currentSpace())
 	case "tab-new":
 		if currentSpace := m.currentSpace(); currentSpace != nil {
 			m.openKindPicker("tab", currentSpace, "", rect{x: m.sidebarContentWidth() + 2, y: 1})
@@ -1336,8 +1383,24 @@ func (m *Model) equalizeCurrent() {
 
 func (m *Model) openNewSpaceInput() (tea.Model, tea.Cmd) {
 	m.mode = modeNewSpace
+	m.worktreeBase = nil
+	m.worktreeEdit = false
 	m.status = ""
 	m.input.Placeholder = "directory (tab completes)"
+	m.input.SetValue("")
+	m.clearCompletions()
+	m.input.Focus()
+	return *m, textinput.Blink
+}
+
+func (m *Model) openWorktreeCreateInput(base *space) (tea.Model, tea.Cmd) {
+	if base == nil || gitWorktreeRoot(base.cwd) == "" {
+		return *m, m.flashStatus("workspace is not a Git worktree")
+	}
+	m.mode = modeNewSpace
+	m.worktreeBase = base
+	m.status = ""
+	m.input.Placeholder = "worktree name"
 	m.input.SetValue("")
 	m.clearCompletions()
 	m.input.Focus()
@@ -1599,6 +1662,10 @@ func (m Model) runMenuAction(action string) (tea.Model, tea.Cmd) {
 			m.openKindPicker("tab", targetSpace, "", at)
 		case "space-worktree":
 			return m.openWorktreePicker(targetSpace, at)
+		case "worktree_open":
+			return m.openWorktreePicker(targetSpace, at)
+		case "worktree_create":
+			return m.openWorktreeCreateInput(targetSpace)
 		}
 		return m, nil
 	}
