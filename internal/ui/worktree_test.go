@@ -1,0 +1,93 @@
+package ui
+
+import (
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/patriceckhart/hrdx/internal/state"
+)
+
+func TestSidebarGroupsMainAndLinkedWorktree(t *testing.T) {
+	repo := t.TempDir()
+	git(t, repo, "init")
+	git(t, repo, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "init")
+	path := filepath.Join(repo, ".worktrees", "feature")
+	git(t, repo, "worktree", "add", path, "-b", "feature")
+	middle := t.TempDir()
+	model := New(Config{Shell: "/bin/sh"}, []string{repo, middle, path}, "", state.State{})
+	groups, branches := 0, 0
+	for _, row := range model.sidebarRows() {
+		if row.kind == "group" {
+			groups++
+		}
+		if row.kind == "space" {
+			branches++
+		}
+	}
+	if groups != 1 || branches != 3 {
+		t.Fatalf("groups/branches = %d/%d, want 1/3", groups, branches)
+	}
+	rows := model.sidebarRows()
+	groupIndex := -1
+	for index, row := range rows {
+		if row.kind == "group" {
+			groupIndex = index
+		}
+	}
+	branchOrder := []int{}
+	for _, row := range rows[groupIndex+1:] {
+		if row.kind == "space" {
+			branchOrder = append(branchOrder, row.space)
+		}
+	}
+	if groupIndex < 0 || len(branchOrder) < 3 || branchOrder[0] != 0 || branchOrder[1] != 2 {
+		t.Fatalf("group rows are not contiguous: %+v", rows)
+	}
+}
+
+func TestWorktreePickerFiltersOpenWorktrees(t *testing.T) {
+	repo := t.TempDir()
+	git(t, repo, "init")
+	git(t, repo, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "init")
+	openPath := filepath.Join(repo, ".worktrees", "open")
+	closedPath := filepath.Join(repo, ".worktrees", "closed")
+	git(t, repo, "worktree", "add", openPath, "-b", "open")
+	git(t, repo, "worktree", "add", closedPath, "-b", "closed")
+	model := New(Config{Shell: "/bin/sh"}, []string{repo, openPath}, "", state.State{})
+	opened, _ := model.openWorktreePicker(model.currentSpace(), rect{})
+	picker := opened.(Model)
+	if len(picker.pickItems) != 1 || !strings.Contains(picker.pickItems[0].label, "closed") {
+		t.Fatalf("picker items = %+v, want only closed worktree", picker.pickItems)
+	}
+}
+
+func TestGitWorktreeRoot(t *testing.T) {
+	repo := t.TempDir()
+	git(t, repo, "init")
+	git(t, repo, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "init")
+	path := filepath.Join(repo, ".worktrees", "feature")
+	git(t, repo, "worktree", "add", path, "-b", "feature")
+	if got := readGitCommonDir(repo); got != repo {
+		t.Fatalf("main readGitCommonDir = %q, want %q", got, repo)
+	}
+	if got := readGitCommonDir(path); got != repo {
+		t.Fatalf("linked readGitCommonDir = %q, want %q", got, repo)
+	}
+	if got := gitWorktreeRoot(repo); got != repo {
+		t.Fatalf("main gitWorktreeRoot = %q, want %q", got, repo)
+	}
+	if got := gitWorktreeRoot(path); got != repo {
+		t.Fatalf("linked gitWorktreeRoot = %q, want %q", got, repo)
+	}
+}
+
+func git(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, output)
+	}
+}

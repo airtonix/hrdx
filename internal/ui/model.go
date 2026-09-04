@@ -68,6 +68,7 @@ var tabMenuItems = []menuItem{
 
 var spaceMenuItems = []menuItem{
 	{"Rename", "space-rename"},
+	{"Open worktree", "space-worktree"},
 	{"Close", "space-close"},
 	{"New tab", "space-tab"},
 }
@@ -495,6 +496,9 @@ func (m *Model) addSpace(path string) *space {
 }
 
 func (m *Model) addSpaceKind(path, kind string) *space {
+	if absolute, err := filepath.Abs(path); err == nil {
+		path = absolute
+	}
 	newSpace := &space{name: filepath.Base(path), cwd: path, tabs: []*tab{{}}}
 	m.spaces = append(m.spaces, newSpace)
 	m.addPane(newSpace, kind, true)
@@ -1228,6 +1232,8 @@ func (m Model) runPrefix(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.splitCurrent("shell", false)
 	case "workspace":
 		return m.openNewSpaceInput()
+	case "worktree-add":
+		return m.openWorktreePicker(m.currentSpace(), rect{x: m.sidebarContentWidth() + 2, y: 1})
 	case "tab-new":
 		if currentSpace := m.currentSpace(); currentSpace != nil {
 			m.openKindPicker("tab", currentSpace, "", rect{x: m.sidebarContentWidth() + 2, y: 1})
@@ -1561,6 +1567,9 @@ func (m Model) runKindPick(kind string) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) runMenuAction(action string) (tea.Model, tea.Cmd) {
+	if path, ok := strings.CutPrefix(action, "worktree-open:"); ok {
+		return m.runWorktreePick(path)
+	}
 	if kind, ok := strings.CutPrefix(action, "kind:"); ok {
 		return m.runKindPick(kind)
 	}
@@ -1588,6 +1597,8 @@ func (m Model) runMenuAction(action string) (tea.Model, tea.Cmd) {
 			m.closeCurrentSpace()
 		case "space-tab":
 			m.openKindPicker("tab", targetSpace, "", at)
+		case "space-worktree":
+			return m.openWorktreePicker(targetSpace, at)
 		}
 		return m, nil
 	}
@@ -2191,14 +2202,52 @@ func (m Model) sidebarRows() []sidebarRow {
 		}
 	}
 
-	for spaceIndex, currentSpace := range m.spaces {
-		if spaceIndex > 0 {
+	groupKeys := make([]string, len(m.spaces))
+	groupCounts := map[string]int{}
+	for index, currentSpace := range m.spaces {
+		key := m.gitBranch(currentSpace.cwd).common
+		if key == "" {
+			key = "workspace:" + currentSpace.cwd
+		}
+		groupKeys[index] = key
+		groupCounts[key]++
+	}
+	var orderedSpaces []int
+	seenGroups := map[string]bool{}
+	for _, key := range groupKeys {
+		if seenGroups[key] {
+			continue
+		}
+		seenGroups[key] = true
+		for candidate, candidateKey := range groupKeys {
+			if candidateKey == key {
+				orderedSpaces = append(orderedSpaces, candidate)
+			}
+		}
+	}
+
+	lastGroup := ""
+	for _, spaceIndex := range orderedSpaces {
+		currentSpace := m.spaces[spaceIndex]
+		groupKey := groupKeys[spaceIndex]
+		if lastGroup != "" && groupKey != lastGroup {
 			rows = append(rows, sidebarRow{
 				label: " " + styleDivider.Render(strings.Repeat("─", width-2)),
 				kind:  "divider", space: spaceIndex, tab: -1, pane: -1,
 			})
 		}
 		rail := " "
+		grouped := groupCounts[groupKey] > 1 && !strings.HasPrefix(groupKey, "workspace:")
+		if grouped && lastGroup != groupKey {
+			groupName := filepath.Base(groupKey)
+			if m.sideCollapsed {
+				groupName = compactSidebarName(groupName, 6)
+			} else {
+				groupName = truncate(groupName, width-3)
+			}
+			rows = append(rows, sidebarRow{label: rail + styleSpaceDim.Render(groupName), kind: "group", space: spaceIndex, tab: -1, pane: -1})
+		}
+		lastGroup = groupKey
 		if spaceIndex == m.selected {
 			rail = styleSpaceSel.Render("▍")
 		}
@@ -2206,12 +2255,29 @@ func (m Model) sidebarRows() []sidebarRow {
 		if m.sideCollapsed {
 			spaceName = compactSidebarName(currentSpace.name, 6)
 		}
-		label := rail + styleSpaceDim.Render(spaceName)
-		rows = append(rows, sidebarRow{
-			label: label,
-			kind:  "space", space: spaceIndex, tab: -1, pane: -1,
-		})
-		if branch := m.gitBranch(currentSpace.cwd); branch.value != "" {
+		branch := m.gitBranch(currentSpace.cwd)
+		if grouped {
+			if branch.value != "" {
+				branchStyle := stylePaneDim
+				if spaceIndex == m.selected {
+					branchStyle = styleSpaceSel
+				}
+				branchName := branch.value
+				if m.sideCollapsed {
+					branchName = compactSidebarName(branchName, 6)
+				} else {
+					branchName = truncate(branchName, width-3)
+				}
+				rows = append(rows, sidebarRow{label: rail + branchStyle.Render(branchName), kind: "space", space: spaceIndex, tab: -1, pane: -1})
+			}
+		} else {
+			label := rail + styleSpaceDim.Render(spaceName)
+			rows = append(rows, sidebarRow{
+				label: label,
+				kind:  "space", space: spaceIndex, tab: -1, pane: -1,
+			})
+		}
+		if !grouped && branch.value != "" {
 			suffixWidth := 0
 			suffix := ""
 			if branch.ahead > 0 && !m.sideCollapsed {
