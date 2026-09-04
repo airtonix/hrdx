@@ -1996,7 +1996,16 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if descendant && hit.space >= 0 && hit.space < len(m.spaces) {
 			m.selected = hit.space
 			m.clearFocusedAttention()
-			m.openSpaceMenu(m.spaces[hit.space], rect{x: msg.X, y: msg.Y - 1})
+			space := m.spaces[hit.space]
+			if hit.kind == "tab" || (hit.kind == "pane" && hit.pane == 0 && len(space.tabs) > 1) {
+				if hit.tab >= 0 && hit.tab < len(space.tabs) {
+					space.active = hit.tab
+					m.resizePanes(space)
+					m.openTabMenu(space.tabs[hit.tab], rect{x: msg.X, y: msg.Y - 1})
+				}
+			} else {
+				m.openSpaceMenu(space, rect{x: msg.X, y: msg.Y - 1})
+			}
 		}
 		return m, nil
 	}
