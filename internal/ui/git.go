@@ -83,6 +83,9 @@ func readGitCommonDir(cwd string) string {
 	if !filepath.IsAbs(common) {
 		common = filepath.Join(cwd, common)
 	}
+	if resolved, err := filepath.EvalSymlinks(common); err == nil {
+		common = resolved
+	}
 	if filepath.Base(filepath.Clean(common)) != ".git" {
 		return ""
 	}

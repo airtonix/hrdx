@@ -104,7 +104,7 @@ func TestCreateWorktreeUsesDefaultCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if path != filepath.Join(repo, ".worktrees", "feature") {
+	if !samePath(path, filepath.Join(repo, ".worktrees", "feature")) {
 		t.Fatalf("path = %q", path)
 	}
 	if got := readGitBranch(path); got != "feature" {

@@ -52,6 +52,9 @@ func gitWorktreeRoot(cwd string) string {
 		return ""
 	}
 	root := filepath.Dir(gitDir)
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
 	return filepath.Clean(root)
 }
 
