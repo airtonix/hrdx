@@ -19,6 +19,20 @@ func TestInterpolateWorktreeCommandQuotesValues(t *testing.T) {
 	}
 }
 
+func TestDefaultWorktreeCommandUsesCompletePathPlaceholder(t *testing.T) {
+	if want := "git worktree add {{path}} -b {{name}}"; defaultWorktreeCommand != want {
+		t.Fatalf("default command = %q, want %q", defaultWorktreeCommand, want)
+	}
+	got := interpolateWorktreeCommand(defaultWorktreeCommand, map[string]string{
+		"path": "/tmp/repo with spaces/.worktrees/feature",
+		"name": "feature",
+	})
+	want := "git worktree add '/tmp/repo with spaces/.worktrees/feature' -b 'feature'"
+	if got != want {
+		t.Fatalf("interpolated default command = %q, want %q", got, want)
+	}
+}
+
 func TestSidebarGroupsMainAndLinkedWorktree(t *testing.T) {
 	repo := t.TempDir()
 	git(t, repo, "init")
@@ -84,6 +98,24 @@ func TestCreateWorktreeUsesDefaultCommand(t *testing.T) {
 	}
 	if path != filepath.Join(repo, ".worktrees", "feature") {
 		t.Fatalf("path = %q", path)
+	}
+	if got := readGitBranch(path); got != "feature" {
+		t.Fatalf("branch = %q, want feature", got)
+	}
+}
+
+func TestCreateWorktreeFindsManagerSelectedPath(t *testing.T) {
+	repo := t.TempDir()
+	git(t, repo, "init")
+	git(t, repo, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "init")
+	model := Model{config: Config{WorktreeCommand: "git worktree add ../custom-{{name}} -b {{name}}"}}
+	path, err := model.createWorktree(&space{cwd: repo}, "feature")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(filepath.Dir(repo), "custom-feature")
+	if path != want {
+		t.Fatalf("path = %q, want %q", path, want)
 	}
 	if got := readGitBranch(path); got != "feature" {
 		t.Fatalf("branch = %q, want feature", got)

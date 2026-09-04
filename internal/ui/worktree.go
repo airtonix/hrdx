@@ -128,7 +128,11 @@ func (m Model) openWorktreePicker(base *space, at rect) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-const defaultWorktreeCommand = `git worktree add {{base_worktree_path}}/.worktrees/{{name}} -b {{name}}`
+// Keep the destination as one interpolated argument. Besides being simpler,
+// this avoids relying on the shell to concatenate separately quoted path
+// components (which is not portable to cmd.exe when the repository path has
+// spaces).
+const defaultWorktreeCommand = `git worktree add {{path}} -b {{name}}`
 
 func shellQuote(value string) string {
 	if runtime.GOOS == "windows" {
@@ -178,6 +182,7 @@ func (m Model) createWorktree(base *space, name string) (string, error) {
 	}
 	root := gitWorktreeRoot(base.cwd)
 	path := filepath.Join(root, ".worktrees", name)
+	before, beforeErr := listWorktrees(base.cwd)
 	command := interpolateWorktreeCommand(m.worktreeCommand(), map[string]string{
 		"name": name, "path": path, "base": base.cwd, "base_worktree_path": root,
 	})
@@ -199,8 +204,31 @@ func (m Model) createWorktree(base *space, name string) (string, error) {
 				return worktree.path, nil
 			}
 		}
+
+		// Some worktree managers, such as worktrunk's `wt switch --create`,
+		// choose the worktree path themselves. In that case the command can
+		// succeed without creating the conventional .worktrees/name path.
+		// Resolve the newly-created worktree by its branch name instead of
+		// rejecting a successful command.
+		if beforeErr == nil {
+			for _, worktree := range worktrees {
+				if worktree.branch != name || containsWorktreePath(before, worktree.path) {
+					continue
+				}
+				return worktree.path, nil
+			}
+		}
 	}
 	return "", fmt.Errorf("create worktree: command did not create %s", path)
+}
+
+func containsWorktreePath(worktrees []worktreeInfo, path string) bool {
+	for _, worktree := range worktrees {
+		if samePath(worktree.path, path) {
+			return true
+		}
+	}
+	return false
 }
 
 func samePath(a, b string) bool {
