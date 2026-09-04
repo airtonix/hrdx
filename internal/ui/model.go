@@ -36,6 +36,7 @@ const (
 	modeTerminal inputMode = iota
 	modePrefix
 	modeNewSpace
+	modeCreateWorktree
 	modeRename
 	modeMenu
 	modeSettings
@@ -67,16 +68,19 @@ var spaceMenuItems = []menuItem{
 	{"Rename", "space-rename"},
 	{"Close", "space-close"},
 	{"New tab", "space-tab"},
+	{"Open worktree", "space-worktree"},
+	{"Create worktree...", "space-worktree-create"},
 }
 
 // Config carries the launch settings for agent panes.
 type Config struct {
-	DefaultAgent string            // agent kind used for new panes and splits
-	AgentBins    map[string]string // per-agent binary overrides
-	ZotArgs      []string          // extra args passed to zot panes only
-	Shell        string
-	Version      string // current binary version for the update check
-	CacheDir     string // directory for the update check cache
+	DefaultAgent      string            // agent kind used for new panes and splits
+	AgentBins         map[string]string // per-agent binary overrides
+	ZotArgs           []string          // extra args passed to zot panes only
+	Shell             string
+	Version           string // current binary version for the update check
+	CacheDir          string // directory for the update check cache
+	WorktreeCreateCmd string // command template using {name}, {path}, and {repo}
 }
 
 type floatPlacement struct {
@@ -152,20 +156,23 @@ type Model struct {
 	pickAction    string             // "space", "tab", "split-right", "split-down", "settings"
 	pickSpace     *space             // tab target for the picker
 	pickPath      string             // directory for a pending new workspace
+	worktreeSpace *space             // workspace whose repository receives a new worktree
+	worktreeAt    rect               // menu position used when starting the create prompt
 	renamePane    *pane
 	renameTab     *tab
 	renameSpace   *space
 	branches      map[string]branchInfo
-	disabled      map[string]bool // agent kinds switched off in settings
-	soundOn       bool            // play a sound when an agent finishes a turn
-	soundKind     string          // which sound: "ding" or a sounds.json entry
-	notifyOn      bool            // post a desktop notification on finish
-	themeName     string          // active bundled or user theme name
-	wasBusy       map[int]bool    // pane id -> spinner seen, for finish notifications
-	soundSeq      map[int]uint64  // invalidates stale agent-finish confirmations
-	paneAttention map[int]bool    // completed while unfocused; cleared only by focus
-	settingsTab   int             // active tab of the settings window
-	settingsIndex int             // selected row of the settings window
+	gitCommon     map[string]string // cwd -> git common directory, discovered on add/restore
+	disabled      map[string]bool   // agent kinds switched off in settings
+	soundOn       bool              // play a sound when an agent finishes a turn
+	soundKind     string            // which sound: "ding" or a sounds.json entry
+	notifyOn      bool              // post a desktop notification on finish
+	themeName     string            // active bundled or user theme name
+	wasBusy       map[int]bool      // pane id -> spinner seen, for finish notifications
+	soundSeq      map[int]uint64    // invalidates stale agent-finish confirmations
+	paneAttention map[int]bool      // completed while unfocused; cleared only by focus
+	settingsTab   int               // active tab of the settings window
+	settingsIndex int               // selected row of the settings window
 	completions   []string
 	completion    int
 	sideScroll    int
@@ -398,6 +405,17 @@ type paneStartedMsg struct {
 	err  error
 }
 
+type worktreeListMsg struct {
+	items []menuItem
+	err   error
+}
+
+type worktreeCreateMsg struct {
+	space *space
+	path  string
+	err   error
+}
+
 // New builds the model. Saved workspaces from statePath are restored first;
 // paths not already present are added on top. Pass statePath == "" to
 // disable persistence.
@@ -410,7 +428,17 @@ func New(config Config, paths []string, statePath string, saved state.State) Mod
 	harnessProblem := ""
 	keymapOverrides := map[string]string{}
 	if statePath != "" {
-		harnessProblem = loadHarnesses(filepath.Dir(statePath))
+		configFile, worktreeProblem := loadWorktreeConfig(filepath.Dir(statePath))
+		if config.WorktreeCreateCmd == "" {
+			config.WorktreeCreateCmd = configFile.Create
+		}
+		harnessProblem = worktreeProblem
+		if problem := loadHarnesses(filepath.Dir(statePath)); problem != "" {
+			if harnessProblem != "" {
+				harnessProblem += "; "
+			}
+			harnessProblem += problem
+		}
 		overrides, keymapProblem := loadKeymap(filepath.Dir(statePath))
 		keymapOverrides = overrides
 		if keymapProblem != "" {
@@ -428,7 +456,7 @@ func New(config Config, paths []string, statePath string, saved state.State) Mod
 	input.Prompt = ""
 
 	model := Model{config: config, input: input, nextID: 1, statePath: statePath,
-		branches: map[string]branchInfo{}, disabled: map[string]bool{},
+		branches: map[string]branchInfo{}, gitCommon: map[string]string{}, disabled: map[string]bool{},
 		wasBusy: map[int]bool{}, soundSeq: map[int]uint64{}, paneAttention: map[int]bool{},
 		soundOn: saved.Sound, status: harnessProblem,
 		soundKind: saved.SoundKind, notifyOn: saved.Notify, themeName: saved.Theme,
@@ -479,6 +507,9 @@ func New(config Config, paths []string, statePath string, saved state.State) Mod
 			model.addSpace(path)
 		}
 	}
+	for _, currentSpace := range model.spaces {
+		model.cacheGitCommon(currentSpace.cwd)
+	}
 	return model
 }
 
@@ -486,7 +517,17 @@ func (m *Model) addSpace(path string) *space {
 	return m.addSpaceKind(path, m.config.DefaultAgent)
 }
 
+func (m *Model) cacheGitCommon(path string) {
+	if m.gitCommon == nil {
+		m.gitCommon = make(map[string]string)
+	}
+	if common, ok := gitCommonDir(path); ok {
+		m.gitCommon[workspacePathKey(path)] = common
+	}
+}
+
 func (m *Model) addSpaceKind(path, kind string) *space {
+	m.cacheGitCommon(path)
 	newSpace := &space{name: filepath.Base(path), cwd: path, tabs: []*tab{{}}}
 	m.spaces = append(m.spaces, newSpace)
 	m.addPane(newSpace, kind, true)
@@ -789,6 +830,42 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateInfo = msg.info
 		return m, nil
 
+	case worktreeCreateMsg:
+		if m.mode != modeCreateWorktree || msg.space != m.worktreeSpace {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.status = ""
+			return m, m.flashStatus("create worktree: " + msg.err.Error())
+		}
+		m.mode = modeTerminal
+		m.worktreeSpace = nil
+		m.status = ""
+		m.statusIsInfo = false
+		m.input.Blur()
+		m.input.SetValue("")
+		m.clearCompletions()
+		newSpace := m.addSpace(msg.path)
+		m.selected = len(m.spaces) - 1
+		m.persist()
+		return m, m.startPane(newSpace, newSpace.tab().panes[0])
+
+	case worktreeListMsg:
+		if m.pickAction != "worktree" {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.closeMenu()
+			return m, m.flashStatus("list worktrees: " + msg.err.Error())
+		}
+		m.pickItems = msg.items
+		if len(msg.items) == 0 {
+			m.closeMenu()
+			return m, m.flashInfo("no unopened worktrees")
+		}
+		m.openMenuBox(m.menuAt)
+		return m, nil
+
 	case tea.FocusMsg:
 		m.appBlurred = false
 		m.clearFocusedAttention()
@@ -1022,6 +1099,42 @@ func keyFromBytes(legacy []byte, code rune, mods int) tea.KeyMsg {
 
 func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.mode {
+	case modeCreateWorktree:
+		switch msg.String() {
+		case "esc":
+			m.mode = modeTerminal
+			m.worktreeSpace = nil
+			m.clearCompletions()
+			m.input.Blur()
+			return m, nil
+		case "tab", "shift+tab":
+			delta := 1
+			if msg.String() == "shift+tab" {
+				delta = -1
+			}
+			m.advanceCompletion(delta)
+			return m, nil
+		case "enter":
+			target := m.worktreeSpace
+			if target == nil {
+				m.mode = modeTerminal
+				m.input.Blur()
+				return m, nil
+			}
+			path, err := resolveWorktreePath(target.cwd, strings.TrimSpace(m.input.Value()))
+			if err != nil {
+				return m, m.flashStatus(err.Error())
+			}
+			m.input.Blur()
+			m.status = "creating worktree..."
+			m.statusIsInfo = true
+			return m, createWorktreeCommand(target.cwd, path, target, m.config.WorktreeCreateCmd, m.config.Shell)
+		}
+		m.clearCompletions()
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
+
 	case modeRename:
 		switch msg.String() {
 		case "esc":
@@ -1212,6 +1325,8 @@ func (m Model) runPrefix(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.splitCurrent("shell", false)
 	case "workspace":
 		return m.openNewSpaceInput()
+	case "worktree-add":
+		return m.openWorktreePicker(m.currentSpace(), rect{x: 1, y: 1})
 	case "tab-new":
 		if currentSpace := m.currentSpace(); currentSpace != nil {
 			m.openKindPicker("tab", currentSpace, "", rect{x: sidebarWidth + 2, y: 1})
@@ -1438,6 +1553,7 @@ func (m *Model) closeMenu() {
 	m.pickAction = ""
 	m.pickSpace = nil
 	m.pickPath = ""
+	m.worktreeSpace = nil
 }
 
 // toggleAgent flips one agent kind in settings. The last enabled agent
@@ -1471,6 +1587,40 @@ func (m *Model) toggleAgent(kind string) tea.Cmd {
 
 // openKindPicker shows a menu with the installed agents plus shell. The
 // chosen kind feeds the pending action: new workspace, new tab, or split.
+func (m *Model) openCreateWorktreeInput(target *space, at rect) (tea.Model, tea.Cmd) {
+	if target == nil {
+		return *m, nil
+	}
+	m.mode = modeCreateWorktree
+	m.worktreeSpace = target
+	m.worktreeAt = at
+	m.input.Placeholder = "worktree name (created under .worktrees)"
+	m.input.SetValue("")
+	m.clearCompletions()
+	m.input.Focus()
+	return *m, textinput.Blink
+}
+
+func (m *Model) openWorktreePicker(target *space, at rect) (tea.Model, tea.Cmd) {
+	if target == nil {
+		return *m, nil
+	}
+	m.mode = modeMenu
+	m.menuPane = nil
+	m.menuTab = nil
+	m.menuSpace = nil
+	m.pickItems = []menuItem{{"loading worktrees...", "worktree-loading"}}
+	m.pickAction = "worktree"
+	m.pickSpace = target
+	m.pickPath = ""
+	m.openMenuBox(at)
+	cwd := target.cwd
+	return *m, func() tea.Msg {
+		items, err := listWorktreeItems(cwd, m.spaces)
+		return worktreeListMsg{items: items, err: err}
+	}
+}
+
 func (m *Model) openKindPicker(action string, target *space, path string, at rect) {
 	var items []menuItem
 	for _, kind := range m.availableAgents() {
@@ -1500,6 +1650,14 @@ func (m Model) runKindPick(kind string) (tea.Model, tea.Cmd) {
 	action, target, path := m.pickAction, m.pickSpace, m.pickPath
 	m.closeMenu()
 	switch action {
+	case "worktree":
+		if path == "" {
+			return m, nil
+		}
+		newSpace := m.addSpace(path)
+		m.selected = len(m.spaces) - 1
+		m.persist()
+		return m, m.startPane(newSpace, newSpace.tab().panes[0])
 	case "space":
 		newSpace := m.addSpaceKind(path, kind)
 		m.selected = len(m.spaces) - 1
@@ -1537,6 +1695,10 @@ func (m Model) runMenuAction(action string) (tea.Model, tea.Cmd) {
 	if kind, ok := strings.CutPrefix(action, "kind:"); ok {
 		return m.runKindPick(kind)
 	}
+	if path, ok := strings.CutPrefix(action, "worktree:"); ok {
+		m.pickPath = path
+		return m.runKindPick("")
+	}
 	targetPane := m.menuPane
 	targetTab := m.menuTab
 	targetSpace := m.menuSpace
@@ -1561,6 +1723,10 @@ func (m Model) runMenuAction(action string) (tea.Model, tea.Cmd) {
 			m.closeCurrentSpace()
 		case "space-tab":
 			m.openKindPicker("tab", targetSpace, "", at)
+		case "space-worktree":
+			return m.openWorktreePicker(targetSpace, at)
+		case "space-worktree-create":
+			return m.openCreateWorktreeInput(targetSpace, at)
 		}
 		return m, nil
 	}
@@ -2115,94 +2281,146 @@ func (m Model) sidebarRows() []sidebarRow {
 		}
 	}
 
-	for spaceIndex, currentSpace := range m.spaces {
-		if spaceIndex > 0 {
-			rows = append(rows, sidebarRow{
-				label: " " + styleDivider.Render(strings.Repeat("─", sidebarWidth-2)),
-				kind:  "divider", space: spaceIndex, tab: -1, pane: -1,
-			})
+	// Worktrees sharing a git common directory are rendered as one group.
+	// Keep the live workspace slice flat: row indices still point directly at
+	// the workspace that owns each tab, pane, and process.
+	groupKeys := make(map[string]string, len(m.spaces))
+	groupCounts := make(map[string]int, len(m.spaces))
+	for _, currentSpace := range m.spaces {
+		key := "space:" + filepath.Clean(currentSpace.cwd)
+		if common := m.gitCommon[workspacePathKey(currentSpace.cwd)]; common != "" {
+			key = common
 		}
-		rail := " "
-		if spaceIndex == m.selected {
-			rail = styleSpaceSel.Render("▍")
+		groupKeys[currentSpace.cwd] = key
+		groupCounts[key]++
+	}
+	var groupOrder []string
+	seenGroups := make(map[string]bool, len(groupKeys))
+	for _, currentSpace := range m.spaces {
+		key := groupKeys[currentSpace.cwd]
+		if !seenGroups[key] {
+			seenGroups[key] = true
+			groupOrder = append(groupOrder, key)
 		}
-		label := rail + styleSpaceDim.Render(truncate(currentSpace.name, sidebarWidth-3))
-		rows = append(rows, sidebarRow{
-			label: label,
-			kind:  "space", space: spaceIndex, tab: -1, pane: -1,
-		})
-		if branch := m.gitBranch(currentSpace.cwd); branch.value != "" {
-			suffixWidth := 0
-			suffix := ""
-			if branch.ahead > 0 {
-				text := fmt.Sprintf(" ↑%d", branch.ahead)
-				suffix += styleDotOn.Render(text)
-				suffixWidth += lipgloss.Width(text)
+	}
+	for groupIndex, groupKey := range groupOrder {
+		grouped := groupCounts[groupKey] > 1
+		groupSelected := false
+		if grouped {
+			for index, candidate := range m.spaces {
+				if groupKeys[candidate.cwd] == groupKey && index == m.selected {
+					groupSelected = true
+					break
+				}
 			}
-			if branch.behind > 0 {
-				text := fmt.Sprintf(" ↓%d", branch.behind)
-				suffix += lipgloss.NewStyle().Foreground(colorAlt).Render(text)
-				suffixWidth += lipgloss.Width(text)
-			}
-			branchStyle := stylePaneDim
-			if spaceIndex == m.selected {
-				branchStyle = styleSpaceSel
-			}
-			rows = append(rows, sidebarRow{
-				label: rail + branchStyle.Render(truncate(branch.value, sidebarWidth-3-suffixWidth)) + suffix,
-				kind:  "space", space: spaceIndex, tab: -1, pane: -1,
-			})
 		}
-
-		showTabs := len(currentSpace.tabs) > 1
-		for tabIndex, currentTab := range currentSpace.tabs {
-			paneIndent := rail + "  "
-			paneNameWidth := sidebarWidth - 6
-			if tabNameWidth > 0 {
-				paneIndent = rail + strings.Repeat(" ", tabNameWidth+3)
-				paneNameWidth = sidebarWidth - tabNameWidth - 7
+		if groupIndex > 0 {
+			rows = append(rows, sidebarRow{label: " " + styleDivider.Render(strings.Repeat("─", sidebarWidth-2)), kind: "divider", space: -1, tab: -1, pane: -1})
+		}
+		if grouped {
+			groupName := filepath.Base(filepath.Dir(groupKey))
+			groupRail := " "
+			if groupSelected {
+				groupRail = styleSpaceSel.Render("▍")
 			}
-
-			shownPanes := 0
-			for paneIndex, currentPane := range currentTab.panes {
-				if currentPane.floating != nil {
-					continue
+			rows = append(rows, sidebarRow{label: groupRail + styleSpaceDim.Render(truncate(groupName, sidebarWidth-3)), kind: "group", space: -1, tab: -1, pane: -1})
+		}
+		for spaceIndex, currentSpace := range m.spaces {
+			if groupKeys[currentSpace.cwd] != groupKey {
+				continue
+			}
+			rail := " "
+			if groupSelected || spaceIndex == m.selected {
+				rail = styleSpaceSel.Render("▍")
+			}
+			branch := m.gitBranch(currentSpace.cwd)
+			spaceName := currentSpace.name
+			grouped := groupCounts[groupKey] > 1
+			if grouped && branch.value != "" {
+				spaceName = branch.value
+			}
+			spaceStyle := styleSpaceDim
+			if grouped {
+				spaceStyle = stylePaneDim
+				if spaceIndex == m.selected {
+					spaceStyle = styleSpaceSel
 				}
-				rowIndent := paneIndent
-				if showTabs && shownPanes == 0 {
-					tabStyle := stylePaneDim
-					tabMarker := "  "
-					if spaceIndex == m.selected && tabIndex == currentSpace.active {
-						tabStyle = styleSpaceSel
-						tabMarker = styleSpaceSel.Render("▸") + " "
-					}
-					tabName := truncate(tabDisplayName(currentTab, tabIndex), 6)
-					tabPadding := strings.Repeat(" ", tabNameWidth-lipgloss.Width(tabName))
-					rowIndent = rail + tabMarker + tabStyle.Render(tabName) + tabPadding + " "
+			}
+			label := rail + spaceStyle.Render(truncate(spaceName, sidebarWidth-3))
+			rows = append(rows, sidebarRow{label: label, kind: "space", space: spaceIndex, tab: -1, pane: -1})
+			if branch.value != "" && !grouped {
+				suffixWidth := 0
+				suffix := ""
+				if branch.ahead > 0 {
+					text := fmt.Sprintf(" ↑%d", branch.ahead)
+					suffix += styleDotOn.Render(text)
+					suffixWidth += lipgloss.Width(text)
 				}
-				selected := spaceIndex == m.selected &&
-					tabIndex == currentSpace.active &&
-					paneIndex == currentTab.selected
-				state := sidebarPaneState(currentPane)
-				stateWidth := lipgloss.Width(state)
-				if state != "" {
-					state = " " + state
-					stateWidth++
+				if branch.behind > 0 {
+					text := fmt.Sprintf(" ↓%d", branch.behind)
+					suffix += lipgloss.NewStyle().Foreground(colorAlt).Render(text)
+					suffixWidth += lipgloss.Width(text)
 				}
-				name := truncate(m.paneDisplayName(currentPane), paneNameWidth-stateWidth)
-				nameStyle := stylePaneDim
-				if currentPane.running {
-					nameStyle = stylePaneRun
+				branchStyle := stylePaneDim
+				if spaceIndex == m.selected {
+					branchStyle = styleSpaceSel
 				}
-				if selected {
-					nameStyle = stylePaneSel
-				}
-				nameLabel := nameStyle.Render(name)
 				rows = append(rows, sidebarRow{
-					label: rowIndent + m.sidebarPaneIcon(currentPane) + nameLabel + state,
-					kind:  "pane", space: spaceIndex, tab: tabIndex, pane: paneIndex,
+					label: rail + branchStyle.Render(truncate(branch.value, sidebarWidth-3-suffixWidth)) + suffix,
+					kind:  "space", space: spaceIndex, tab: -1, pane: -1,
 				})
-				shownPanes++
+			}
+
+			showTabs := len(currentSpace.tabs) > 1
+			for tabIndex, currentTab := range currentSpace.tabs {
+				paneIndent := rail + "  "
+				paneNameWidth := sidebarWidth - 6
+				if tabNameWidth > 0 {
+					paneIndent = rail + strings.Repeat(" ", tabNameWidth+3)
+					paneNameWidth = sidebarWidth - tabNameWidth - 7
+				}
+
+				shownPanes := 0
+				for paneIndex, currentPane := range currentTab.panes {
+					if currentPane.floating != nil {
+						continue
+					}
+					rowIndent := paneIndent
+					if showTabs && shownPanes == 0 {
+						tabStyle := stylePaneDim
+						tabMarker := "  "
+						if spaceIndex == m.selected && tabIndex == currentSpace.active {
+							tabStyle = styleSpaceSel
+							tabMarker = styleSpaceSel.Render("▸") + " "
+						}
+						tabName := truncate(tabDisplayName(currentTab, tabIndex), 6)
+						tabPadding := strings.Repeat(" ", tabNameWidth-lipgloss.Width(tabName))
+						rowIndent = rail + tabMarker + tabStyle.Render(tabName) + tabPadding + " "
+					}
+					selected := spaceIndex == m.selected &&
+						tabIndex == currentSpace.active &&
+						paneIndex == currentTab.selected
+					state := sidebarPaneState(currentPane)
+					stateWidth := lipgloss.Width(state)
+					if state != "" {
+						state = " " + state
+						stateWidth++
+					}
+					name := truncate(m.paneDisplayName(currentPane), paneNameWidth-stateWidth)
+					nameStyle := stylePaneDim
+					if currentPane.running {
+						nameStyle = stylePaneRun
+					}
+					if selected {
+						nameStyle = stylePaneSel
+					}
+					nameLabel := nameStyle.Render(name)
+					rows = append(rows, sidebarRow{
+						label: rowIndent + m.sidebarPaneIcon(currentPane) + nameLabel + state,
+						kind:  "pane", space: spaceIndex, tab: tabIndex, pane: paneIndex,
+					})
+					shownPanes++
+				}
 			}
 		}
 	}
@@ -2302,8 +2520,11 @@ func (m Model) publishCursor() {
 			m.cursorSink.Set(sidebarWidth+1+inner.x+x, 2+inner.y+y, true)
 			return
 		}
-	case modeNewSpace, modeRename:
+	case modeNewSpace, modeCreateWorktree, modeRename:
 		badge := " NEW WORKSPACE "
+		if m.mode == modeCreateWorktree {
+			badge = " CREATE WORKTREE "
+		}
 		if m.mode == modeRename {
 			badge = " RENAME "
 		}
@@ -2697,6 +2918,9 @@ func (m Model) renderFooter() string {
 			}
 			body += styleBarMuted.Render("  ") + strings.Join(hints, styleBarMuted.Render("  "))
 		}
+	case modeCreateWorktree:
+		badge = styleBadgeInput.Render(" CREATE WORKTREE ")
+		body = styleBarText.Render(" " + m.input.View())
 	case modeRename:
 		badge = styleBadgeInput.Render(" RENAME ")
 		body = styleBarText.Render(" " + m.input.View())
