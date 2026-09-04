@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/airtonix/hrdx/internal/vt"
 	"github.com/aymanbagabas/go-pty"
-	"github.com/patriceckhart/hrdx/internal/vt"
 )
 
 // SessionHost is the holder-side transport of a pane: a background

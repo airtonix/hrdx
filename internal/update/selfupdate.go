@@ -33,7 +33,7 @@ import (
 // freshly-compiled local binary back to whatever's on GitHub.
 func Run(version string) error {
 	if version == "" || version == "dev" || version == "0.0.0" {
-		return errors.New("dev build (version 0.0.0): `hrdx update` is disabled. Build a release tag or download from https://github.com/patriceckhart/hrdx/releases")
+		return errors.New("dev build (version 0.0.0): `hrdx update` is disabled. Build a release tag or download from https://github.com/airtonix/hrdx/releases")
 	}
 	current := VersionOnly(version)
 

@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/airtonix/hrdx/internal/holder"
+	"github.com/airtonix/hrdx/internal/state"
+	"github.com/airtonix/hrdx/internal/term"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/patriceckhart/hrdx/internal/holder"
-	"github.com/patriceckhart/hrdx/internal/state"
-	"github.com/patriceckhart/hrdx/internal/term"
 )
 
 func newTestModel(paths ...string) Model {

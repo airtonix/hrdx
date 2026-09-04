@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/patriceckhart/hrdx/internal/vt"
+	"github.com/airtonix/hrdx/internal/vt"
 )
 
 // Attribute bits mirrored from the vt package's unexported constants.

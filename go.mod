@@ -1,4 +1,4 @@
-module github.com/patriceckhart/hrdx
+module github.com/airtonix/hrdx
 
 go 1.25.0
 

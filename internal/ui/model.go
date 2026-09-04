@@ -8,15 +8,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/airtonix/hrdx/internal/api"
+	"github.com/airtonix/hrdx/internal/holder"
+	"github.com/airtonix/hrdx/internal/state"
+	"github.com/airtonix/hrdx/internal/term"
+	"github.com/airtonix/hrdx/internal/update"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
-	"github.com/patriceckhart/hrdx/internal/api"
-	"github.com/patriceckhart/hrdx/internal/holder"
-	"github.com/patriceckhart/hrdx/internal/state"
-	"github.com/patriceckhart/hrdx/internal/term"
-	"github.com/patriceckhart/hrdx/internal/update"
 )
 
 func contains(values []string, wanted string) bool {

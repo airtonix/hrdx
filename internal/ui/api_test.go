@@ -3,7 +3,7 @@ package ui
 import (
 	"testing"
 
-	"github.com/patriceckhart/hrdx/internal/api"
+	"github.com/airtonix/hrdx/internal/api"
 )
 
 func apiIntPtr(value int) *int { return &value }

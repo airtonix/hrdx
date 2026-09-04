@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/patriceckhart/hrdx/internal/state"
+	"github.com/airtonix/hrdx/internal/state"
 )
 
 func TestAgentKinds(t *testing.T) {

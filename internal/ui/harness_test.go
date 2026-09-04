@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/patriceckhart/hrdx/internal/state"
-	"github.com/patriceckhart/hrdx/internal/term"
+	"github.com/airtonix/hrdx/internal/state"
+	"github.com/airtonix/hrdx/internal/term"
 )
 
 // resetHarnesses removes all custom entries registered by a test.

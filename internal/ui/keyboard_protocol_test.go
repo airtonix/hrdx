@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/patriceckhart/hrdx/internal/term"
+	"github.com/airtonix/hrdx/internal/term"
 )
 
 // keyboardCaptureHost is the holder-side transport needed by NewHolderPane.

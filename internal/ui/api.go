@@ -5,8 +5,8 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/airtonix/hrdx/internal/api"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/patriceckhart/hrdx/internal/api"
 )
 
 // handleAPI executes one external API request inside the update loop and

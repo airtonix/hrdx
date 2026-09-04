@@ -1,6 +1,6 @@
 package ui
 
-import "github.com/patriceckhart/hrdx/internal/state"
+import "github.com/airtonix/hrdx/internal/state"
 
 // snapshot converts the live model into its serializable form.
 func (m *Model) snapshot() state.State {

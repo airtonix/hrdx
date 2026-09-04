@@ -3,7 +3,7 @@ package ui
 import (
 	"testing"
 
-	"github.com/patriceckhart/hrdx/internal/state"
+	"github.com/airtonix/hrdx/internal/state"
 )
 
 func TestSnapshotRestoreRoundTrip(t *testing.T) {
