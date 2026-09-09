@@ -425,6 +425,48 @@ func TestMouseSelectsSidebarTabAndPane(t *testing.T) {
 	}
 }
 
+func TestSidebarTabContextMenuClosesOnlyTab(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	currentSpace := model.spaces[0]
+	model.addTab(currentSpace, "shell")
+	secondTab := currentSpace.tabs[1]
+
+	// The first pane row for a multi-tab workspace is also its tab row.
+	// Screen Y is sidebar row + 1: row 4 is the first tab row.
+	updated, _ := model.updateMouse(tea.MouseMsg{X: 7, Y: 5, Button: tea.MouseButtonRight, Action: tea.MouseActionPress})
+	got := updated.(Model)
+	if got.mode != modeMenu || got.menuTab != currentSpace.tabs[0] || got.menuSpace != nil {
+		t.Fatalf("sidebar tab context target = tab %p/space %p, want tab %p and no space menu",
+			got.menuTab, got.menuSpace, currentSpace.tabs[0])
+	}
+
+	updated, _ = got.runMenuAction("tab-close")
+	got = updated.(Model)
+	if len(got.spaces) != 1 {
+		t.Fatalf("workspaces after closing tab = %d, want 1", len(got.spaces))
+	}
+	if len(got.spaces[0].tabs) != 1 || got.spaces[0].tabs[0] != secondTab {
+		t.Fatalf("tabs after closing tab = %v, want the second tab only", got.spaces[0].tabs)
+	}
+}
+
+func TestSidebarWorkspaceContextMenuStillClosesWorkspace(t *testing.T) {
+	model := newTestModel("/tmp/api", "/tmp/web")
+
+	// The first workspace row is screen Y=4.
+	updated, _ := model.updateMouse(tea.MouseMsg{X: 3, Y: 4, Button: tea.MouseButtonRight, Action: tea.MouseActionPress})
+	got := updated.(Model)
+	if got.mode != modeMenu || got.menuSpace != got.spaces[0] || got.menuTab != nil {
+		t.Fatalf("workspace context target = space %p/tab %p, want space menu", got.menuSpace, got.menuTab)
+	}
+
+	updated, _ = got.runMenuAction("space-close")
+	got = updated.(Model)
+	if len(got.spaces) != 1 || got.spaces[0].name != "web" {
+		t.Fatalf("workspaces after closing workspace = %v, want web only", got.spaces)
+	}
+}
+
 func TestMouseSidebarPaneClickPersists(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.json")
 	model := New(Config{Shell: "/bin/sh"}, []string{"/tmp/api"}, statePath, state.State{})

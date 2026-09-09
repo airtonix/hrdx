@@ -1917,11 +1917,17 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// context menu next to the cursor.
 	if msg.Button == tea.MouseButtonRight && msg.Action == tea.MouseActionPress {
 		hit := m.sidebarHit(msg.Y - 1)
-		descendant := hit.kind == "space" || hit.kind == "tab" || hit.kind == "pane"
-		if descendant && hit.space >= 0 && hit.space < len(m.spaces) {
+		if hit.space >= 0 && hit.space < len(m.spaces) {
 			m.selected = hit.space
 			m.clearFocusedAttention()
-			m.openSpaceMenu(m.spaces[hit.space], rect{x: msg.X, y: msg.Y - 1})
+			if hit.tabRow && hit.tab >= 0 && hit.tab < len(m.spaces[hit.space].tabs) {
+				target := m.spaces[hit.space]
+				target.active = hit.tab
+				m.resizePanes(target)
+				m.openTabMenu(target.tabs[hit.tab], rect{x: msg.X, y: msg.Y - 1})
+			} else if hit.kind == "space" || hit.kind == "tab" || hit.kind == "pane" {
+				m.openSpaceMenu(m.spaces[hit.space], rect{x: msg.X, y: msg.Y - 1})
+			}
 		}
 		return m, nil
 	}
@@ -2039,11 +2045,12 @@ func (m *Model) focusPane(owner *space, target *pane) {
 // "tab", "pane", or "new". The render and mouse hit test share this layout
 // so they can never drift apart.
 type sidebarRow struct {
-	label string
-	kind  string
-	space int
-	tab   int
-	pane  int
+	label  string
+	kind   string
+	space  int
+	tab    int
+	pane   int
+	tabRow bool
 }
 
 // paneBusy reports whether a pane running an agent (agent panes, or shell
@@ -2306,6 +2313,7 @@ func (m Model) sidebarRows() []sidebarRow {
 				rows = append(rows, sidebarRow{
 					label: rowIndent + m.sidebarPaneIcon(currentPane) + nameLabel + state + trailing,
 					kind:  "pane", space: spaceIndex, tab: tabIndex, pane: paneIndex,
+					tabRow: showTabs && shownPanes == 0,
 				})
 				shownPanes++
 			}
