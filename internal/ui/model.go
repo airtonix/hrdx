@@ -1913,15 +1913,37 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Right-click anywhere in a workspace hierarchy opens the workspace
-	// context menu next to the cursor.
+	// Context menus follow the row's scope. Only workspace rows may
+	// offer workspace close; combined tab/pane rows offer tab actions.
 	if msg.Button == tea.MouseButtonRight && msg.Action == tea.MouseActionPress {
 		hit := m.sidebarHit(msg.Y - 1)
-		descendant := hit.kind == "space" || hit.kind == "tab" || hit.kind == "pane"
-		if descendant && hit.space >= 0 && hit.space < len(m.spaces) {
+		if hit.space < 0 || hit.space >= len(m.spaces) {
+			return m, nil
+		}
+		target := m.spaces[hit.space]
+		at := rect{x: msg.X, y: msg.Y - 1}
+		switch hit.kind {
+		case "space":
 			m.selected = hit.space
 			m.clearFocusedAttention()
-			m.openSpaceMenu(m.spaces[hit.space], rect{x: msg.X, y: msg.Y - 1})
+			m.openSpaceMenu(target, at)
+		case "pane":
+			if hit.tab < 0 || hit.tab >= len(target.tabs) {
+				return m, nil
+			}
+			currentTab := target.tabs[hit.tab]
+			if hit.pane < 0 || hit.pane >= len(currentTab.panes) {
+				return m, nil
+			}
+			m.selected = hit.space
+			m.focusPane(target, currentTab.panes[hit.pane])
+			m.resizePanes(target)
+			m.persist()
+			if hit.tabRow {
+				m.openTabMenu(currentTab, at)
+			} else {
+				m.openMenu(currentTab.panes[hit.pane], at)
+			}
 		}
 		return m, nil
 	}
@@ -2039,11 +2061,12 @@ func (m *Model) focusPane(owner *space, target *pane) {
 // "tab", "pane", or "new". The render and mouse hit test share this layout
 // so they can never drift apart.
 type sidebarRow struct {
-	label string
-	kind  string
-	space int
-	tab   int
-	pane  int
+	label  string
+	kind   string
+	space  int
+	tab    int
+	pane   int
+	tabRow bool
 }
 
 // paneBusy reports whether a pane running an agent (agent panes, or shell
@@ -2306,6 +2329,7 @@ func (m Model) sidebarRows() []sidebarRow {
 				rows = append(rows, sidebarRow{
 					label: rowIndent + m.sidebarPaneIcon(currentPane) + nameLabel + state + trailing,
 					kind:  "pane", space: spaceIndex, tab: tabIndex, pane: paneIndex,
+					tabRow: showTabs && shownPanes == 0,
 				})
 				shownPanes++
 			}
