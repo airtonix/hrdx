@@ -1913,20 +1913,36 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Right-click anywhere in a workspace hierarchy opens the workspace
-	// context menu next to the cursor.
+	// Context menus follow the row's scope. Only workspace rows may
+	// offer workspace close; combined tab/pane rows offer tab actions.
 	if msg.Button == tea.MouseButtonRight && msg.Action == tea.MouseActionPress {
 		hit := m.sidebarHit(msg.Y - 1)
-		if hit.space >= 0 && hit.space < len(m.spaces) {
+		if hit.space < 0 || hit.space >= len(m.spaces) {
+			return m, nil
+		}
+		target := m.spaces[hit.space]
+		at := rect{x: msg.X, y: msg.Y - 1}
+		switch hit.kind {
+		case "space":
 			m.selected = hit.space
 			m.clearFocusedAttention()
-			if hit.tabRow && hit.tab >= 0 && hit.tab < len(m.spaces[hit.space].tabs) {
-				target := m.spaces[hit.space]
-				target.active = hit.tab
-				m.resizePanes(target)
-				m.openTabMenu(target.tabs[hit.tab], rect{x: msg.X, y: msg.Y - 1})
-			} else if hit.kind == "space" || hit.kind == "tab" || hit.kind == "pane" {
-				m.openSpaceMenu(m.spaces[hit.space], rect{x: msg.X, y: msg.Y - 1})
+			m.openSpaceMenu(target, at)
+		case "pane":
+			if hit.tab < 0 || hit.tab >= len(target.tabs) {
+				return m, nil
+			}
+			currentTab := target.tabs[hit.tab]
+			if hit.pane < 0 || hit.pane >= len(currentTab.panes) {
+				return m, nil
+			}
+			m.selected = hit.space
+			m.focusPane(target, currentTab.panes[hit.pane])
+			m.resizePanes(target)
+			m.persist()
+			if hit.tabRow {
+				m.openTabMenu(currentTab, at)
+			} else {
+				m.openMenu(currentTab.panes[hit.pane], at)
 			}
 		}
 		return m, nil
