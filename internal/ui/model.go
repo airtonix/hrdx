@@ -136,6 +136,7 @@ type Model struct {
 	status        string
 	statusIsInfo  bool // status is a notice, not an error: accent styling
 	kittyPushed   bool
+	mouseInput    mouseInputDecoder
 	drag          *splitNode
 	dragFull      rect
 	statePath     string
@@ -787,6 +788,20 @@ func (m *Model) resizePanes(target *space) {
 }
 
 func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	messages, pending := m.mouseInput.decode(message)
+	if len(messages) == 1 && pending == nil {
+		return m.update(messages[0])
+	}
+	commands := []tea.Cmd{pending}
+	for _, decoded := range messages {
+		updated, command := m.update(decoded)
+		m = updated.(Model)
+		commands = append(commands, command)
+	}
+	return m, tea.Batch(commands...)
+}
+
+func (m Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := message.(type) {
 	case tea.WindowSizeMsg:
 		if !m.kittyPushed {
