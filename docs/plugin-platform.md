@@ -19,7 +19,7 @@ Status: experimental implementation of the external-peer boundary discussed in [
 - Host lifecycle menus, a settings section, CLI management, and additive control-socket methods.
 - A standard-library-only reference peer in `examples/plugins/hello`.
 
-Outside the implemented runtime: per-tab/per-pane grant scopes (workspace or instance only), automatic reload without explicit reapproval, automatic restart/backoff, durable event replay, and OS sandboxing. `TODO.md` retains unfinished work rather than treating these as completed features.
+Outside the implemented runtime: per-tab/per-pane grant scopes (workspace or instance only), automatic reload without explicit reapproval, automatic restart/backoff, durable event replay, and OS sandboxing.
 
 ## Trust boundary
 
