@@ -250,18 +250,37 @@ func TestHolderReplaysDetachedOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The marker prints shortly after attach; we detach before it fires.
-	lateScript := "sleep 0.3; echo late-marker; sleep 30"
-	if runtime.GOOS == "windows" {
-		lateScript = "Start-Sleep -Milliseconds 300; Write-Output 'late-marker'; Start-Sleep -Seconds 30"
-	}
-	latePath, lateArgs := testShell(lateScript)
-	session, err := first.Start(latePath, lateArgs, t.TempDir(), testEnv(), 80, 24)
+	// The helper prints a marker only after it is told to, so the test
+	// controls exactly when output happens relative to detach. PowerShell
+	// startup on Windows CI runners is too slow for a fixed sleep.
+	path, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
+	args := []string{"-test.run=^TestHolderEchoHelper$"}
+	env := append(os.Environ(), "HRDX_HOLDER_ECHO_HELPER=1")
+	session, err := first.Start(path, args, t.TempDir(), env, 80, 24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanup, connectErr := Connect(socket)
+		if connectErr != nil {
+			return
+		}
+		defer cleanup.Close()
+		_, _ = cleanup.call(request{Op: "kill", Session: session})
+	})
+	var ready collector
+	if _, err := first.Attach(session, 80, 24, ready.sink); err != nil {
+		t.Fatal(err)
+	}
+	waitContains(t, &ready, "ready")
+	// Ask for the marker, then detach before it can be delivered to a
+	// subscriber: the holder must buffer it for the next attach.
+	first.Write(session, []byte("late-marker\n"))
 	first.Close()
-	time.Sleep(600 * time.Millisecond) // marker printed while detached
+	time.Sleep(300 * time.Millisecond) // marker printed while detached
 
 	second, err := Connect(socket)
 	if err != nil {

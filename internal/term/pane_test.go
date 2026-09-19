@@ -33,7 +33,9 @@ func startShellPane(t *testing.T, script string) *Pane {
 
 func waitExit(t *testing.T, pane *Pane) {
 	t.Helper()
-	deadline := time.After(5 * time.Second)
+	// PowerShell startup on shared Windows CI runners can take several
+	// seconds before the one-line script even begins.
+	deadline := time.After(15 * time.Second)
 	for {
 		select {
 		case _, open := <-pane.Updates():
