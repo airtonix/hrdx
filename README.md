@@ -275,8 +275,8 @@ While hrdx runs it serves a control API on a unix socket next to the state file 
 The protocol is newline-delimited JSON: send one request per line, receive one response line with the same `id`.
 
 ```sh
-SOCK="$HOME/Library/Application Support/hrdx/hrdx.sock"   # macOS
-# SOCK="$XDG_CONFIG_HOME/hrdx/hrdx.sock"                  # Linux
+SOCK="$HOME/Library/Application Support/hrdx/hrdx.sock"   # macOS default
+# SOCK="$XDG_CONFIG_HOME/hrdx/hrdx.sock"                  # Linux, or macOS with XDG_CONFIG_HOME set
 # hrdx.sock is a native Windows AF_UNIX socket too (%AppData%\hrdx\hrdx.sock).
 # WSL has a separate socket namespace and cannot connect to it directly; Git
 # Bash does not ship a compatible `nc -U`. Use a native Windows client, such
@@ -368,7 +368,7 @@ The notification section of the settings window has two independent toggles for 
 
 Quitting hrdx does not kill your sessions. Pane processes live in a small background process (the session holder) that hrdx starts on demand and talks to over a local socket. Close the TUI, reopen it, and every shell and agent reattaches exactly where it was: running commands keep running, scrollback and screen state are replayed, nothing restarts. The holder is the same `hrdx` binary, uses no resources worth mentioning, and goes away when you kill its sessions.
 
-Workspaces, panes, split layout, ratios, selection, sidebar collapsed state, and holder session ids are saved automatically (default: `~/Library/Application Support/hrdx/state.json` on macOS, `$XDG_CONFIG_HOME/hrdx/state.json` on Linux, `%AppData%\hrdx\state.json` on Windows). On the next launch the layout is restored and each pane reattaches to its held session. When a held session is gone (rebooted machine, killed holder), the pane starts fresh instead: shell panes get a new shell, and agent panes relaunch resuming their latest session for that directory via the agent's own session store.
+Workspaces, panes, split layout, ratios, selection, sidebar collapsed state, and holder session ids are saved automatically (default: `~/Library/Application Support/hrdx/state.json` on macOS, `$XDG_CONFIG_HOME/hrdx/state.json` on Linux, `%AppData%\hrdx\state.json` on Windows). An absolute `XDG_CONFIG_HOME` takes precedence on macOS too, so everything hrdx stores next to the state file (keys, harnesses, themes, plugins, sockets) follows it. An existing `~/Library/Application Support/hrdx` keeps being used until you move it to `$XDG_CONFIG_HOME/hrdx`, so setting the variable never orphans running sessions. Windows ignores the variable. On the next launch the layout is restored and each pane reattaches to its held session. When a held session is gone (rebooted machine, killed holder), the pane starts fresh instead: shell panes get a new shell, and agent panes relaunch resuming their latest session for that directory via the agent's own session store.
 
 `--persist=false` disables the holder (panes die with the TUI, like a plain terminal). `--fresh` skips restoring and cleans up now-unreferenced held sessions; `--state ""` disables persistence entirely.
 

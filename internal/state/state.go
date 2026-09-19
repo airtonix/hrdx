@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 type Pane struct {
@@ -78,7 +79,19 @@ type State struct {
 }
 
 // DefaultPath returns the state file location under the user config dir.
+// Everything else hrdx stores (keys, harnesses, themes, plugins, sockets)
+// lives next to it, so this is the single place that decides the directory.
 func DefaultPath() string {
+	base := configBase(runtime.GOOS, os.Getenv("XDG_CONFIG_HOME"), platformConfigDir())
+	if base == "" {
+		return ""
+	}
+	return filepath.Join(base, "hrdx", "state.json")
+}
+
+// platformConfigDir is the OS convention: Application Support on macOS,
+// XDG_CONFIG_HOME or ~/.config on Linux, %AppData% on Windows.
+func platformConfigDir() string {
 	base, err := os.UserConfigDir()
 	if err != nil {
 		home, herr := os.UserHomeDir()
@@ -87,7 +100,34 @@ func DefaultPath() string {
 		}
 		base = filepath.Join(home, ".config")
 	}
-	return filepath.Join(base, "hrdx", "state.json")
+	return base
+}
+
+// configBase prefers an absolute XDG_CONFIG_HOME on every Unix-like system,
+// including macOS, where os.UserConfigDir ignores it. Windows keeps its
+// native directory and a relative XDG value is ignored per the spec.
+//
+// Existing installations keep working: when hrdx already has a directory
+// under the platform location and none under XDG yet, the platform location
+// stays in use so sessions, keys, and approvals are not silently orphaned.
+// Moving that directory under XDG_CONFIG_HOME switches over.
+func configBase(goos, xdg, platform string) string {
+	if goos == "windows" || xdg == "" || !filepath.IsAbs(xdg) {
+		return platform
+	}
+	xdg = filepath.Clean(xdg)
+	if platform == "" || platform == xdg {
+		return xdg
+	}
+	if !dirExists(filepath.Join(xdg, "hrdx")) && dirExists(filepath.Join(platform, "hrdx")) {
+		return platform
+	}
+	return xdg
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // Load reads the state file. A missing file returns an empty state, nil.
