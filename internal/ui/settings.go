@@ -19,6 +19,15 @@ type settingsRow struct {
 
 var settingsTabNames = []string{"agents", "notification", "theme", "terminal"}
 
+// settingsTabs adds the plugins section only when the runtime is enabled so
+// the window is unchanged for users who never opted in.
+func (m Model) settingsTabs() []string {
+	if m.plugins == nil {
+		return settingsTabNames
+	}
+	return append(append([]string{}, settingsTabNames...), "plugins")
+}
+
 func settingsCheck(on bool) string {
 	if on {
 		return "[x] "
@@ -65,6 +74,8 @@ func (m Model) settingsRows() []settingsRow {
 		return rows
 	case 3: // terminal
 		return []settingsRow{{settingsCheck(m.autoCopy) + "automatically copy selected text", "auto-copy"}}
+	case 4: // plugins
+		return m.pluginSettingsRows()
 	default: // agents
 		installed := map[string]bool{}
 		for _, kind := range m.installedAgents() {
@@ -125,6 +136,9 @@ func (m *Model) toggleSettingsRow(row settingsRow) tea.Cmd {
 		m.autoCopy = !m.autoCopy
 		m.persist()
 	}
+	if strings.HasPrefix(row.action, "plugin-") {
+		return m.togglePluginSetting(row.action)
+	}
 	return nil
 }
 
@@ -137,7 +151,7 @@ func (m Model) settingsBox() rect {
 	width := lipgloss.Width(settingsHint)
 	rowCount := 0
 	tab := m.settingsTab
-	for index := range settingsTabNames {
+	for index := range m.settingsTabs() {
 		probe := m
 		probe.settingsTab = index
 		rows := probe.settingsRows()
@@ -155,7 +169,7 @@ func (m Model) settingsBox() rect {
 	// The tab row has one leading cell and one trailing spacer per label.
 	// Include its full width so it cannot extend beyond the modal border.
 	tabsWidth := 1
-	for _, name := range settingsTabNames {
+	for _, name := range m.settingsTabs() {
 		tabsWidth += lipgloss.Width(name) + 3
 	}
 	width = max(width, tabsWidth+2) // left and right border
@@ -186,9 +200,9 @@ func (m Model) visibleSettingsRows(box rect) ([]settingsRow, int) {
 // settingsTabCells returns the clickable x ranges of the tab labels,
 // relative to the box's left edge.
 func (m Model) settingsTabCells() []tabCell {
-	cells := make([]tabCell, 0, len(settingsTabNames))
+	cells := make([]tabCell, 0, len(m.settingsTabs()))
 	x := 2
-	for index, name := range settingsTabNames {
+	for index, name := range m.settingsTabs() {
 		width := len(name) + 2
 		cells = append(cells, tabCell{from: x, to: x + width, index: index})
 		x += width + 1
@@ -211,11 +225,11 @@ func (m Model) updateSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.closeSettings()
 		return m, nil
 	case "tab", "right", "l":
-		m.settingsTab = (m.settingsTab + 1) % len(settingsTabNames)
+		m.settingsTab = (m.settingsTab + 1) % len(m.settingsTabs())
 		m.settingsIndex = 0
 		return m, nil
 	case "shift+tab", "left", "h":
-		m.settingsTab = (m.settingsTab - 1 + len(settingsTabNames)) % len(settingsTabNames)
+		m.settingsTab = (m.settingsTab - 1 + len(m.settingsTabs())) % len(m.settingsTabs())
 		m.settingsIndex = 0
 		return m, nil
 	case "enter", " ":
@@ -301,7 +315,7 @@ func (m Model) overlaySettings(bodyRows []string) {
 	var tabs strings.Builder
 	tabs.WriteString(fill.Render(" "))
 	used := 1
-	for index, name := range settingsTabNames {
+	for index, name := range m.settingsTabs() {
 		label := " " + name + " "
 		if index == m.settingsTab {
 			tabs.WriteString(active.Render(label))

@@ -38,6 +38,8 @@ type Pane struct {
 	session             int64
 	updates             chan struct{}
 	exited              bool
+	input               inputQueue
+	writeMu             sync.Mutex              // serializes local PTY writes from input and emulator replies
 	keyboardMode        [2]keyboardProtocolMode // shell and full-screen app views
 	keyboardAlt         bool
 	modifyOtherKeys     bool // active xterm fallback setting
@@ -92,12 +94,14 @@ func Start(command string, args []string, cwd string, cols, rows int) (*Pane, er
 	}
 
 	pane := &Pane{
-		vt:      vt.New(vt.WithSize(cols, rows), vt.WithWriter(ptmx)),
 		pty:     ptmx,
 		cmd:     cmd,
 		updates: make(chan struct{}, 1),
 	}
+	pane.vt = vt.New(vt.WithSize(cols, rows), vt.WithWriter(lockedWriter{&pane.writeMu, ptmx}))
+	pane.input.init()
 	go pane.reader()
+	go pane.inputWriter()
 	return pane, nil
 }
 
@@ -122,12 +126,15 @@ func NewHolderPane(host SessionHost, session int64, cols, rows int) *Pane {
 	if rows < 2 {
 		rows = 24
 	}
-	return &Pane{
+	pane := &Pane{
 		vt:      vt.New(vt.WithSize(cols, rows), vt.WithWriter(hostWriter{host, session})),
 		host:    host,
 		session: session,
 		updates: make(chan struct{}, 1),
 	}
+	pane.input.init()
+	go pane.inputWriter()
+	return pane
 }
 
 // HolderSession returns the holder session id, 0 for local panes.
@@ -153,6 +160,7 @@ func (p *Pane) MarkExited() {
 	p.exited = true
 	p.mu.Unlock()
 	close(p.updates)
+	p.input.close()
 }
 
 // resolveCommand finds command on $PATH before handing it to go-pty. On
@@ -621,19 +629,153 @@ func (p *Pane) notify() {
 }
 
 // Write forwards raw input bytes (key encodings) to the subprocess and
-// snaps the view back to live output.
+// snaps the view back to live output. Bytes are queued in order and written
+// by one goroutine, so a child that stops reading its PTY cannot block the
+// caller (the UI loop) while it holds the terminal lock. Keyboard input
+// beyond the queue limit is still accepted: the queue grows, and the UI
+// loop is never blocked. Use TryWrite for best-effort automation input.
 func (p *Pane) Write(data []byte) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.scrollOffset = 0
-	if p.exited {
+	exited := p.exited
+	p.mu.Unlock()
+	if exited || len(data) == 0 {
 		return
 	}
-	if p.host != nil {
-		p.host.Write(p.session, data)
-		return
+	p.input.push(data, false)
+}
+
+// MaxQueuedInput bounds automation input queued behind a stalled child. It is
+// generous for pasted prompts and small for a runaway peer.
+const MaxQueuedInput = 256 * 1024
+
+// TryWrite queues automation input behind any pending keyboard input. It
+// reports false, without queuing anything, when the child is gone or has
+// already left MaxQueuedInput bytes unread. Ordering with keyboard input is
+// preserved because both paths share one FIFO.
+func (p *Pane) TryWrite(data []byte) bool {
+	p.mu.Lock()
+	exited := p.exited
+	if !exited {
+		p.scrollOffset = 0
 	}
-	_, _ = p.pty.Write(data)
+	p.mu.Unlock()
+	if exited || len(data) == 0 {
+		return false
+	}
+	return p.input.push(data, true)
+}
+
+// QueuedInput reports bytes accepted but not yet written to the child.
+func (p *Pane) QueuedInput() int { return p.input.pending() }
+
+// FlushInput waits until every queued byte has been handed to the child or
+// the pane exited. Tests use it to observe input deterministically.
+func (p *Pane) FlushInput() { p.input.drain() }
+
+// inputQueue is an ordered byte FIFO with a single consumer.
+type inputQueue struct {
+	mu     sync.Mutex
+	cond   *sync.Cond
+	chunks [][]byte
+	bytes  int
+	busy   bool // a chunk is being written by inputWriter
+	closed bool
+}
+
+func (q *inputQueue) init() { q.cond = sync.NewCond(&q.mu) }
+
+func (q *inputQueue) push(data []byte, bounded bool) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed || (bounded && q.bytes+len(data) > MaxQueuedInput) {
+		return false
+	}
+	q.chunks = append(q.chunks, append([]byte(nil), data...))
+	q.bytes += len(data)
+	q.cond.Signal()
+	return true
+}
+
+func (q *inputQueue) pop() ([]byte, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.busy {
+		// The previous chunk has been written; wake any FlushInput waiter.
+		q.busy = false
+		q.cond.Broadcast()
+	}
+	for len(q.chunks) == 0 && !q.closed {
+		q.cond.Wait()
+	}
+	if len(q.chunks) == 0 {
+		return nil, false
+	}
+	data := q.chunks[0]
+	q.chunks[0] = nil
+	q.chunks = q.chunks[1:]
+	q.bytes -= len(data)
+	q.busy = true
+	return data, true
+}
+
+func (q *inputQueue) drain() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for (len(q.chunks) > 0 || q.busy) && !q.closed {
+		q.cond.Wait()
+	}
+}
+
+func (q *inputQueue) pending() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.bytes
+}
+
+func (q *inputQueue) close() {
+	q.mu.Lock()
+	q.closed = true
+	q.chunks = nil
+	q.bytes = 0
+	q.cond.Broadcast()
+	q.mu.Unlock()
+}
+
+// inputWriter drains the queue into the PTY or holder in order. It exits
+// when MarkExited closes the queue, so a blocked final write ends once the
+// PTY is closed by Close or the reader's exit path.
+func (p *Pane) inputWriter() {
+	for {
+		data, ok := p.input.pop()
+		if !ok {
+			return
+		}
+		if p.host != nil {
+			p.host.Write(p.session, data)
+			continue
+		}
+		p.writeMu.Lock()
+		_, err := p.pty.Write(data)
+		p.writeMu.Unlock()
+		if err != nil {
+			return
+		}
+	}
+}
+
+// lockedWriter serializes emulator responses (cursor reports, device
+// attributes) with queued input so two writers cannot interleave bytes
+// inside one escape sequence.
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  interface{ Write([]byte) (int, error) }
+}
+
+func (l lockedWriter) Write(data []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(data)
 }
 
 // Resize grows or shrinks both the PTY and the virtual screen.

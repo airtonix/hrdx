@@ -23,6 +23,8 @@ const findVisibleRows = 10
 func (m *Model) openFind() (tea.Model, tea.Cmd) {
 	m.mode = modeFind
 	m.findIndex = 0
+	m.providerQuery = ""
+	m.providerRows = nil
 	m.input.Placeholder = "workspace, tab, or pane"
 	m.input.SetValue("")
 	m.input.Focus()
@@ -31,6 +33,8 @@ func (m *Model) openFind() (tea.Model, tea.Cmd) {
 
 func (m *Model) closeFind() {
 	m.mode = modeTerminal
+	m.providerQuery = ""
+	m.providerRows = nil
 	m.input.Blur()
 }
 
@@ -91,15 +95,16 @@ func (m *Model) jumpTo(chosen findCandidate) {
 
 func (m Model) updateFindKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	candidates := m.findCandidates()
+	total := len(candidates) + len(m.providerRows)
 	switch m.navigationAction(msg) {
 	case "navigate-up":
-		if len(candidates) > 0 {
-			m.findIndex = (m.findIndex - 1 + len(candidates)) % len(candidates)
+		if total > 0 {
+			m.findIndex = (m.findIndex - 1 + total) % total
 		}
 		return m, nil
 	case "navigate-down":
-		if len(candidates) > 0 {
-			m.findIndex = (m.findIndex + 1) % len(candidates)
+		if total > 0 {
+			m.findIndex = (m.findIndex + 1) % total
 		}
 		return m, nil
 	}
@@ -108,21 +113,25 @@ func (m Model) updateFindKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.closeFind()
 		return m, nil
 	case "ctrl+p":
-		if len(candidates) > 0 {
-			m.findIndex = (m.findIndex - 1 + len(candidates)) % len(candidates)
+		if total > 0 {
+			m.findIndex = (m.findIndex - 1 + total) % total
 		}
 		return m, nil
 	case "ctrl+n":
-		if len(candidates) > 0 {
-			m.findIndex = (m.findIndex + 1) % len(candidates)
+		if total > 0 {
+			m.findIndex = (m.findIndex + 1) % total
 		}
 		return m, nil
 	case "enter":
-		if len(candidates) > 0 {
-			m.jumpTo(candidates[clampInt(m.findIndex, 0, len(candidates)-1)])
-		} else {
-			m.closeFind()
+		index := clampInt(m.findIndex, 0, max(0, total-1))
+		if index < len(candidates) {
+			m.jumpTo(candidates[index])
+			return m, nil
 		}
+		if index-len(candidates) < len(m.providerRows) {
+			return m, m.selectProviderRow(m.providerRows[index-len(candidates)])
+		}
+		m.closeFind()
 		return m, nil
 	}
 	before := m.input.Value()
@@ -130,6 +139,7 @@ func (m Model) updateFindKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.input, cmd = m.input.Update(msg)
 	if m.input.Value() != before {
 		m.findIndex = 0
+		cmd = tea.Batch(cmd, m.pluginProviderQuery())
 	}
 	return m, cmd
 }
@@ -143,10 +153,15 @@ func (m Model) findBox() rect {
 			width = w
 		}
 	}
+	for _, candidate := range m.providerRows {
+		if w := lipgloss.Width(candidate.label()) + 6; w > width {
+			width = w
+		}
+	}
 	bodyW := max(1, m.width)
 	bodyH := max(1, m.height-2)
 	width = min(width, max(20, bodyW-4))
-	rows := min(len(candidates), findVisibleRows)
+	rows := min(len(candidates)+len(m.providerRows), findVisibleRows)
 	if rows == 0 {
 		rows = 1
 	}
@@ -173,7 +188,14 @@ func (m Model) overlayFind(bodyRows []string) {
 	}
 
 	candidates := m.findCandidates()
-	selected := clampInt(m.findIndex, 0, max(0, len(candidates)-1))
+	labels := make([]string, 0, len(candidates)+len(m.providerRows))
+	for _, candidate := range candidates {
+		labels = append(labels, candidate.label)
+	}
+	for _, candidate := range m.providerRows {
+		labels = append(labels, candidate.label())
+	}
+	selected := clampInt(m.findIndex, 0, max(0, len(labels)-1))
 	start := 0
 	if selected >= findVisibleRows {
 		start = selected - findVisibleRows + 1
@@ -185,15 +207,15 @@ func (m Model) overlayFind(bodyRows []string) {
 	query := " > " + m.input.Value()
 	lines = append(lines, border.Render("│")+normal.Render(pad(truncate(query, innerW)))+border.Render("│"))
 	lines = append(lines, border.Render("│")+faint.Render(pad(" "+strings.Repeat("─", max(0, innerW-2))+" "))+border.Render("│"))
-	if len(candidates) == 0 {
+	if len(labels) == 0 {
 		lines = append(lines, border.Render("│")+muted.Render(pad("  no matches"))+border.Render("│"))
 	}
-	for index := start; index < len(candidates) && index < start+findVisibleRows; index++ {
+	for index := start; index < len(labels) && index < start+findVisibleRows; index++ {
 		style := normal
 		if index == selected {
 			style = active
 		}
-		lines = append(lines, border.Render("│")+style.Render(pad(truncate("  "+candidates[index].label, innerW)))+border.Render("│"))
+		lines = append(lines, border.Render("│")+style.Render(pad(truncate("  "+labels[index], innerW)))+border.Render("│"))
 	}
 	lines = append(lines, border.Render("╰"+strings.Repeat("─", max(0, innerW))+"╯"))
 

@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "id": "example.future",
+  "version": "1.0.0",
+  "entrypoint": "plugin.exe",
+  "protocol": {"min": 2, "max": 3}
+}

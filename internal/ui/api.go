@@ -22,6 +22,8 @@ func (m *Model) handleAPI(request api.Request) tea.Cmd {
 	ok := func(data any) { answer(data, "", "") }
 
 	switch request.Method {
+	case "plugins.status", "plugins.control":
+		return m.handlePluginAPI(request)
 	case "status":
 		ok(m.apiStatus())
 		return nil

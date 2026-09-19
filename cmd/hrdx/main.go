@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/patriceckhart/hrdx/internal/api"
 	"github.com/patriceckhart/hrdx/internal/holder"
+	"github.com/patriceckhart/hrdx/internal/plugin"
 	"github.com/patriceckhart/hrdx/internal/state"
 	"github.com/patriceckhart/hrdx/internal/ui"
 	"github.com/patriceckhart/hrdx/internal/update"
@@ -96,10 +97,12 @@ func (p *paths) Set(value string) error {
 }
 
 func main() {
-	// Subcommand routing before flag parsing: `hrdx update` and
-	// `hrdx --version` never start the TUI.
+	// Subcommand routing before flag parsing: update, plugin inventory, and
+	// version commands never start the TUI.
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "plugins":
+			os.Exit(runPlugins(os.Args[2:], os.Stdout, os.Stderr))
 		case "update":
 			var err error
 			switch {
@@ -140,7 +143,7 @@ func main() {
 	var cwd paths
 	var agent, provider, model, reasoning, shell, statePath string
 	var zotBin, piBin, claudeBin, codexBin string
-	var resume, fresh, apiOn, persistOn bool
+	var resume, fresh, apiOn, persistOn, pluginsOn, pluginViews bool
 	flag.Var(&cwd, "cwd", "project directory to open as a workspace (repeatable)")
 	flag.StringVar(&agent, "agent", "zot", "default agent for new panes: zot, pi, claude, codex, or a custom harness kind")
 	flag.StringVar(&provider, "provider", "", "zot provider (zot panes only)")
@@ -156,7 +159,17 @@ func main() {
 	flag.BoolVar(&fresh, "fresh", false, "ignore saved workspaces and start clean")
 	flag.BoolVar(&apiOn, "api", true, "serve the control API on a unix socket next to the state file")
 	flag.BoolVar(&persistOn, "persist", true, "keep pane processes alive across restarts via the session holder")
+	flag.BoolVar(&pluginsOn, "plugins", false, "enable the experimental runtime for explicitly approved plugins")
+	flag.BoolVar(&pluginViews, "plugin-views", false, "allow approved floating plugin views (requires --plugins)")
 	flag.Parse()
+	if pluginViews && !pluginsOn {
+		fmt.Fprintln(os.Stderr, "hrdx: --plugin-views requires --plugins")
+		os.Exit(2)
+	}
+	if pluginsOn && statePath == "" {
+		fmt.Fprintln(os.Stderr, "hrdx: --plugins requires a nonempty --state location for approvals")
+		os.Exit(2)
+	}
 
 	saved := state.State{}
 	if !fresh {
@@ -193,6 +206,7 @@ func main() {
 
 	config := ui.Config{
 		DefaultAgent: agent,
+		PluginViews:  pluginViews,
 		AgentBins: map[string]string{
 			"zot":    zotBin,
 			"pi":     piBin,
@@ -209,6 +223,16 @@ func main() {
 	modelUI := ui.New(config, cwd, statePath, saved)
 	events := api.NewBroadcaster()
 	modelUI.SetEventBroadcaster(events)
+	var plugins *plugin.Runtime
+	if pluginsOn {
+		registrations, diagnostics := plugin.LoadRegistrations(filepath.Dir(statePath))
+		for _, diagnostic := range diagnostics {
+			fmt.Fprintf(os.Stderr, "hrdx plugin: %s (%q)\n", diagnostic.Message, diagnostic.Path)
+		}
+		plugins = plugin.NewRuntime(registrations, filepath.Join(filepath.Dir(statePath), "plugin-data"))
+		plugins.WatchApprovals(filepath.Dir(statePath))
+		modelUI.SetPlugins(plugins)
+	}
 
 	// Session holder: pane processes live in a small background process
 	// and survive TUI restarts. Attach to a running holder or spawn one.
@@ -251,8 +275,12 @@ func main() {
 		})
 	}
 
-	if _, err := program.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "hrdx:", err)
+	_, runErr := program.Run()
+	if plugins != nil {
+		plugins.Close()
+	}
+	if runErr != nil {
+		fmt.Fprintln(os.Stderr, "hrdx:", runErr)
 		os.Exit(1)
 	}
 }

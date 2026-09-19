@@ -91,6 +91,39 @@ type MenuRegister struct {
 	ActionID string `json:"action_id"`
 }
 
+// PluginControl manages an already approved plugin in the experimental runtime.
+// The trusted control socket does not create approvals or grant capabilities.
+type PluginControl struct {
+	Plugin string `json:"plugin"`
+	Action string `json:"action"` // start, stop, restart, reload
+}
+
+// PluginStatus is the public lifecycle representation, not a live registration.
+type PluginStatus struct {
+	ID              string         `json:"id"`
+	Name            string         `json:"name,omitempty"`
+	Version         string         `json:"version,omitempty"`
+	Protocol        int            `json:"protocol,omitempty"`
+	PackagePath     string         `json:"package_path,omitempty"`
+	RequestedGrants []string       `json:"requested_grants,omitempty"`
+	GrantedGrants   []string       `json:"granted_grants,omitempty"`
+	WorkspaceScopes []string       `json:"workspace_scopes,omitempty"`
+	InstanceScope   bool           `json:"instance_scope,omitempty"`
+	Actions         []string       `json:"actions,omitempty"`
+	Views           []string       `json:"views,omitempty"`
+	Providers       []string       `json:"providers,omitempty"`
+	Markers         []string       `json:"activation_markers,omitempty"`
+	Config          map[string]any `json:"config,omitempty"`
+	State           string         `json:"state"`
+	Generation      string         `json:"generation,omitempty"`
+	Error           string         `json:"error,omitempty"`
+}
+
+type PluginStatuses struct {
+	Type    string         `json:"type"`
+	Plugins []PluginStatus `json:"plugins"`
+}
+
 // PaneStatus describes one pane in a status reply.
 type PaneStatus struct {
 	ID        int    `json:"pane_id"`

@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "id": "example.hello",
+  "version": "1.1.0",
+  "name": "Hello plugin",
+  "entrypoint": "hello.exe",
+  "protocol": {"min": 1, "max": 1},
+  "requests": ["ui.action.contribute", "ui.notification", "ui.provider.contribute", "ui.view.contribute", "ui.view.input"],
+  "config": [
+    {"key": "greeting", "type": "string", "default": "Hello", "label": "Greeting word"}
+  ],
+  "contributes": {
+    "actions": [
+      {"id": "example.hello.greet", "label": "Hello from plugin", "targets": ["workspace", "pane"]}
+    ],
+    "providers": [
+      {"id": "example.hello.search", "kind": "search", "label": "Hello search"}
+    ],
+    "views": ["example.hello.panel"]
+  }
+}

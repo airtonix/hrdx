@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/mattn/go-runewidth"
 	"github.com/patriceckhart/hrdx/internal/api"
 	"github.com/patriceckhart/hrdx/internal/holder"
+	"github.com/patriceckhart/hrdx/internal/plugin"
 	"github.com/patriceckhart/hrdx/internal/state"
 	"github.com/patriceckhart/hrdx/internal/term"
 	"github.com/patriceckhart/hrdx/internal/update"
@@ -43,6 +45,7 @@ const (
 	modeMenu
 	modeSettings
 	modeFind
+	modePluginView
 )
 
 // menuItem is one entry of the right-click context menu.
@@ -80,6 +83,7 @@ type Config struct {
 	Shell        string
 	Version      string // current binary version for the update check
 	CacheDir     string // directory for the update check cache
+	PluginViews  bool   // explicitly enabled experimental floating views
 }
 
 type floatPlacement struct {
@@ -150,6 +154,7 @@ type Model struct {
 	menuSpace     *space
 	menuAt        rect // menu box in body coordinates
 	menuIndex     int
+	menuScroll    int
 	customMenus   []api.MenuRegister // ephemeral socket API context-menu entries
 	pickItems     []menuItem         // kind picker entries while it is open
 	navKeys       map[string]string  // custom local navigation overrides from keys.json
@@ -190,7 +195,24 @@ type Model struct {
 	keyOverrides  map[string]string // action -> key from keys.json, for hints
 	findIndex     int               // selected row of the find window
 	quitting      bool              // shutting down: exits must not edit the layout
+
+	plugins             *plugin.Runtime
+	pluginStates        map[string]plugin.Status
+	pluginTexts         map[string]pluginStatusText
+	pluginNotices       map[string]time.Time
+	pluginSubscriptions map[string]*pluginSubscription
+	pluginTicking       bool
+	pluginViews         map[string]*pluginView
+	pluginViewOrder     []string
+	pluginViewFocus     string
+	pluginPanes         map[int]pluginPaneOwner // temporary floating panes owned by a plugin generation
+	providerQuery       string                  // last finder query sent to providers
+	providerRows        []providerCandidate     // provider results for providerQuery
 }
+
+// pluginPaneOwner ties a temporary pane to the plugin connection that created
+// it. The pane is closed when that generation stops, unlike durable panes.
+type pluginPaneOwner struct{ plugin, generation string }
 
 // staleAfter is how long the terminal must have been unfocused before a
 // focus regain triggers the full repaint. System sleep exceeds this
@@ -275,7 +297,7 @@ func (m Model) menuItems() []menuItem {
 			items = append(items, menuItem{registration.Label, "custom:" + registration.ActionID})
 		}
 	}
-	return items
+	return append(items, m.pluginMenuItems(target)...)
 }
 
 func (m Model) spaceByTab(target *tab) *space {
@@ -595,7 +617,7 @@ func checkForUpdate(cacheDir, version string) tea.Cmd {
 
 func (m Model) Init() tea.Cmd {
 	var commands []tea.Cmd
-	commands = append(commands, checkForUpdate(m.config.CacheDir, m.config.Version))
+	commands = append(commands, checkForUpdate(m.config.CacheDir, m.config.Version), waitPluginEvent(m.plugins))
 	m.gcHolderSessions()
 	for _, currentSpace := range m.spaces {
 		for _, currentTab := range currentSpace.tabs {
@@ -724,7 +746,28 @@ func (m Model) sidebarContentWidth() int {
 
 // terminalArea is the local rect of the pane region (right of the sidebar,
 // below the tab bar, above the footer). Row 0 of the body is the tab bar.
+// terminalArea is the region the split tree fills. Docked plugin views
+// reserve strips at its right or bottom edge; the tree itself never learns
+// about them, so every persistent pane still appears exactly once in it.
 func (m Model) terminalArea() rect {
+	area := m.fullTerminalArea()
+	for _, id := range m.pluginViewOrder {
+		view := m.pluginViews[id]
+		if view == nil || view.Dock == "" {
+			continue
+		}
+		box := m.dockedViewBox(view, area)
+		switch view.Dock {
+		case "right":
+			area.w = max(minPaneCols, area.w-box.w)
+		case "bottom":
+			area.h = max(minPaneRows, area.h-box.h)
+		}
+	}
+	return area
+}
+
+func (m Model) fullTerminalArea() rect {
 	return rect{0, 0, max(minPaneCols, m.width-m.sidebarContentWidth()-1), max(minPaneRows, m.height-3)}
 }
 
@@ -803,6 +846,16 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := message.(type) {
+	case pluginTickMsg:
+		return m, m.publishPluginSnapshots()
+	case pluginEventMsg:
+		return m, m.handlePluginEvent(msg.event)
+	case pluginActivationMsg:
+		return m, m.handlePluginActivation(msg)
+	case pluginResultMsg:
+		return m, m.handlePluginResult(msg)
+	case providerQueryMsg:
+		return m, m.handleProviderResult(msg)
 	case tea.WindowSizeMsg:
 		if !m.kittyPushed {
 			// The first size message arrives after Bubble Tea entered the
@@ -811,6 +864,13 @@ func (m Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.kittyPushed = true
 		}
 		m.width, m.height = msg.Width, msg.Height
+		m.resizePluginViews()
+		if m.mode == modeMenu {
+			selected := m.menuIndex
+			m.openMenuBox(m.menuAt)
+			m.menuIndex = clampInt(selected, 0, max(0, len(m.menuItems())-1))
+			m.scrollMenuIntoView()
+		}
 		for _, currentSpace := range m.spaces {
 			m.resizePanes(currentSpace)
 		}
@@ -1053,6 +1113,8 @@ func keyFromBytes(legacy []byte, code rune, mods int) tea.KeyMsg {
 
 func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.mode {
+	case modePluginView:
+		return m.updatePluginViewKey(msg)
 	case modeRename:
 		switch msg.String() {
 		case "esc":
@@ -1093,12 +1155,20 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case modeMenu:
 		items := m.menuItems()
+		if len(items) == 0 {
+			m.closeMenu()
+			return m, nil
+		}
+		m.menuIndex = clampInt(m.menuIndex, 0, len(items)-1)
+		m.scrollMenuIntoView()
 		switch m.navigationAction(msg) {
 		case "navigate-up":
 			m.menuIndex = (m.menuIndex - 1 + len(items)) % len(items)
+			m.scrollMenuIntoView()
 			return m, nil
 		case "navigate-down":
 			m.menuIndex = (m.menuIndex + 1) % len(items)
+			m.scrollMenuIntoView()
 			return m, nil
 		}
 		switch msg.String() {
@@ -1275,6 +1345,8 @@ func (m Model) runPrefix(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "settings":
 		m.openSettings()
+	case "plugins":
+		return m, m.openPluginManager()
 	case "sidebar-toggle":
 		m.toggleSidebar()
 	case "scroll-up":
@@ -1419,6 +1491,7 @@ func (m *Model) openRenameTabInput(target *tab, index int) (tea.Model, tea.Cmd) 
 // spanning sidebar and terminal.
 func (m *Model) openMenuBox(at rect) {
 	m.menuIndex = 0
+	m.menuScroll = 0
 	width := 0
 	for _, item := range m.menuItems() {
 		if w := lipgloss.Width(item.label); w > width {
@@ -1430,6 +1503,7 @@ func (m *Model) openMenuBox(at rect) {
 
 	bodyW := max(1, m.width)
 	bodyH := max(1, m.height-2)
+	width, height = min(width, bodyW), min(height, bodyH)
 	x := clampInt(at.x, 0, max(0, bodyW-width))
 	y := clampInt(at.y, 0, max(0, bodyH-height))
 	m.menuAt = rect{x, y, width, height}
@@ -1535,12 +1609,16 @@ func (m *Model) openKindPicker(action string, target *space, path string, at rec
 			m.menuIndex = index
 		}
 	}
+	m.scrollMenuIntoView()
 }
 
 // runKindPick executes the pending picker action with the chosen kind.
 func (m Model) runKindPick(kind string) (tea.Model, tea.Cmd) {
 	action, target, path := m.pickAction, m.pickSpace, m.pickPath
 	m.closeMenu()
+	if target != nil && !slices.Contains(m.spaces, target) {
+		return m, nil
+	}
 	switch action {
 	case "space":
 		newSpace := m.addSpaceKind(path, kind)
@@ -1585,6 +1663,23 @@ func (m Model) runMenuAction(action string) (tea.Model, tea.Cmd) {
 	at := m.menuAt
 	m.closeMenu()
 
+	// Asynchronous socket/plugin actions can remove a menu's target before
+	// the user invokes it. Never fall back to the newly focused resource.
+	if targetSpace != nil && !slices.Contains(m.spaces, targetSpace) {
+		return m, nil
+	}
+	if targetTab != nil && m.spaceByTab(targetTab) == nil {
+		return m, nil
+	}
+	if targetPane != nil {
+		live, _ := m.paneByID(targetPane.id)
+		if live != targetPane {
+			return m, nil
+		}
+	}
+	if strings.HasPrefix(action, "plugin-") {
+		return m, m.runPluginMenu(action, targetPane, targetTab, targetSpace)
+	}
 	if actionID, ok := strings.CutPrefix(action, "custom:"); ok {
 		m.publishMenuAction(actionID, targetPane, targetTab, targetSpace)
 		return m, nil
@@ -1666,6 +1761,9 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.mode == modeSettings {
 		return m.updateSettingsMouse(msg)
 	}
+	if m.pluginViewMouse(msg) {
+		return m, nil
+	}
 
 	sidebarContentWidth := m.sidebarContentWidth()
 	localX := msg.X - sidebarContentWidth - 1
@@ -1713,8 +1811,9 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		bodyX, bodyY := msg.X, msg.Y-1
 		items := m.menuItems()
 		if msg.Action == tea.MouseActionMotion && m.menuAt.hit(bodyX, bodyY) {
-			index := bodyY - m.menuAt.y - 1
-			if index >= 0 && index < len(items) {
+			row := bodyY - m.menuAt.y - 1
+			index := row + m.menuStart()
+			if row >= 0 && row < m.menuAt.h-2 && index < len(items) {
 				m.menuIndex = index
 			}
 			return m, nil
@@ -1723,8 +1822,9 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.menuAt.hit(bodyX, bodyY) && msg.Button == tea.MouseButtonLeft {
-			index := bodyY - m.menuAt.y - 1
-			if index >= 0 && index < len(items) {
+			row := bodyY - m.menuAt.y - 1
+			index := row + m.menuStart()
+			if row >= 0 && row < m.menuAt.h-2 && index < len(items) {
 				m.menuIndex = index
 				return m.runMenuAction(items[index].action)
 			}
@@ -2396,6 +2496,11 @@ func (m Model) View() string {
 	sidebar := m.renderSidebar()
 	right := m.renderTabBar() + "\n" + m.renderTerminal()
 	body := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, right)
+	if len(m.pluginViews) > 0 {
+		rows := strings.Split(body, "\n")
+		m.overlayPluginViews(rows)
+		body = strings.Join(rows, "\n")
+	}
 	if m.mode == modeMenu {
 		rows := strings.Split(body, "\n")
 		m.overlayMenu(rows)
@@ -2445,7 +2550,14 @@ func (m Model) publishCursor() {
 				break
 			}
 			// Screen: sidebar plus border to the left, header and tab bar above.
-			m.cursorSink.Set(m.sidebarContentWidth()+1+inner.x+x, 2+inner.y+y, true)
+			screenX, screenY := m.sidebarContentWidth()+1+inner.x+x, 2+inner.y+y
+			for _, view := range m.pluginViews {
+				if m.pluginViewBox(view).hit(screenX, screenY-1) {
+					m.cursorSink.Set(0, 0, false)
+					return
+				}
+			}
+			m.cursorSink.Set(screenX, screenY, true)
 			return
 		}
 	case modeNewSpace, modeRename:
@@ -2657,9 +2769,27 @@ func (m Model) renderTerminal() string {
 	return strings.Join(rows, "\n")
 }
 
+func (m Model) menuStart() int {
+	return clampInt(m.menuScroll, 0, max(0, len(m.menuItems())-max(1, m.menuAt.h-2)))
+}
+
+func (m *Model) scrollMenuIntoView() {
+	visible := max(1, m.menuAt.h-2)
+	if m.menuIndex < m.menuScroll {
+		m.menuScroll = m.menuIndex
+	}
+	if m.menuIndex >= m.menuScroll+visible {
+		m.menuScroll = m.menuIndex - visible + 1
+	}
+	m.menuScroll = m.menuStart()
+}
+
 // overlayMenu draws the context menu box over the composed rows.
 func (m Model) overlayMenu(rows []string) {
 	box := m.menuAt
+	if box.w < 2 || box.h < 3 {
+		return
+	}
 	border := lipgloss.NewStyle().Foreground(colorAccent)
 	normal := lipgloss.NewStyle().Background(colorBarBg).Foreground(colorBarFg)
 	active := lipgloss.NewStyle().Background(colorAccent).Foreground(colorInk).Bold(true)
@@ -2667,8 +2797,11 @@ func (m Model) overlayMenu(rows []string) {
 	innerW := box.w - 2
 	lines := make([]string, 0, box.h)
 	lines = append(lines, border.Render("╭"+strings.Repeat("─", innerW)+"╮"))
-	for index, item := range m.menuItems() {
-		label := " " + item.label + strings.Repeat(" ", max(0, innerW-lipgloss.Width(item.label)-1))
+	start := m.menuStart()
+	items := m.menuItems()
+	for index := start; index < len(items) && index < start+box.h-2; index++ {
+		label := ansiCut(" "+items[index].label, 0, innerW)
+		label += strings.Repeat(" ", max(0, innerW-lipgloss.Width(label)))
 		style := normal
 		if index == m.menuIndex {
 			style = active
@@ -2846,6 +2979,9 @@ func (m Model) renderFooter() string {
 	case modeRename:
 		badge = styleBadgeInput.Render(" RENAME ")
 		body = styleBarText.Render(" " + m.input.View())
+	case modePluginView:
+		badge = styleBadgeInput.Render(" PLUGIN ")
+		body = styleBarMuted.Render(" esc closes view, " + m.prefixTrigger + " opens host commands")
 	case modeMenu:
 		badge = styleBadgePrefix.Render(" MENU ")
 		body = styleBarMuted.Render(" click or arrows + enter, esc closes")
@@ -2882,6 +3018,8 @@ func (m Model) renderFooter() string {
 			style = styleBarInfo
 		}
 		body += style.Render("  " + m.status)
+	} else if text := m.pluginFooter(); text != "" {
+		body += styleBarInfo.Render("  " + text)
 	}
 
 	// The footer must occupy exactly one terminal row. Prefer the active
@@ -2982,6 +3120,7 @@ func (m Model) prefixHintEntries() [][2]string {
 		{keys("scroll-up", "scroll-down"), "scroll"},
 		{keys("close-pane", "close-space"), "close"},
 		{keys("settings"), "settings"},
+		{keys("plugins"), "plugins"},
 		{keys("quit"), "quit"},
 	}
 	out := entries[:0]
@@ -3179,6 +3318,9 @@ func (m *Model) closeCurrentSpace() {
 
 func (m *Model) closeAll() {
 	m.quitting = true
+	if m.plugins != nil {
+		m.plugins.BeginShutdown()
+	}
 	m.persist()
 	if m.kittyPushed {
 		// Pop while the alt screen is still active, before Bubble Tea

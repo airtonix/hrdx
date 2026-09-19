@@ -68,6 +68,8 @@ hrdx --agent claude
 | `--fresh` | Ignore saved workspaces and start clean |
 | `--api` | Serve the control API on a unix socket (default on, `--api=false` disables) |
 | `--persist` | Keep pane processes alive across restarts via the session holder (default on) |
+| `--plugins` | Enable the experimental runtime for explicitly approved plugins (default off) |
+| `--plugin-views` | Allow approved floating plugin views, requires `--plugins` (default off) |
 
 A native Windows `hrdx.exe` launched from Git Bash ignores an MSYS-only `SHELL` value such as `/usr/bin/bash`, which Windows cannot resolve, and falls back to `%COMSPEC%`. To use Git Bash for panes, pass a native path explicitly, for example `hrdx --shell "C:/Program Files/Git/bin/bash.exe"`.
 
@@ -87,6 +89,7 @@ All keys go to the focused terminal, except the `ctrl+b` prefix (tmux style):
 | `tab` or `shift+tab` | Next / previous pane; stays in prefix mode for repeated jumps, `esc` exits |
 | `/` | Fuzzy finder over every workspace, tab, and pane: type to filter, arrows select, enter jumps |
 | `b` | Collapse or expand the workspace sidebar |
+| `P` | Open experimental plugin lifecycle controls |
 | `r` | Rename the focused pane |
 | `m` | Open the pane context menu |
 | `=` | Equalize all splits |
@@ -116,7 +119,7 @@ Keys are configurable via a `keys.json` next to the state file (`~/Library/Appli
 }
 ```
 
-Actions: `prefix`, `literal`, `quit`, `picker-right`, `picker-down`, `agent-right`, `agent-down`, `agent-cycle` (unbound by default), `shell-right`, `shell-down`, `workspace`, `tab-new`, `tab-next`, `tab-prev`, `space-next`, `space-prev`, `pane-next`, `pane-prev`, `find`, `sidebar-toggle`, `close-pane`, `close-space`, `equalize`, `rename`, `menu`, `settings`, `scroll-up`, `scroll-down`, `live`, `navigate-up`, `navigate-down`.
+Actions: `prefix`, `literal`, `quit`, `picker-right`, `picker-down`, `agent-right`, `agent-down`, `agent-cycle` (unbound by default), `shell-right`, `shell-down`, `workspace`, `tab-new`, `tab-next`, `tab-prev`, `space-next`, `space-prev`, `pane-next`, `pane-prev`, `find`, `sidebar-toggle`, `close-pane`, `close-space`, `equalize`, `rename`, `menu`, `settings`, `plugins`, `scroll-up`, `scroll-down`, `live`, `navigate-up`, `navigate-down`.
 
 ## Mouse
 
@@ -124,7 +127,7 @@ Everything is clickable: workspace, tab, and pane rows in the sidebar, the colla
 
 Local scrollback stops at the oldest available line; further upward wheel events do not wrap back to live output. hrdx reassembles mouse reports fragmented by its input decoder so rapid wheel input is not mistaken for typing. A literal `alt+[` may wait up to 30 ms to distinguish it from a fragmented mouse report; ordinary Escape, other keys, and paste keep their normal behavior.
 
-Sidebar context menus follow the clicked row: workspace names and Git branch rows offer workspace actions; the first pane row of each tab in a multi-tab workspace offers tab actions; other pane rows offer pane actions. Closing a tab leaves the workspace and its other tabs intact. The final tab cannot be closed through the tab menu, and pane menus omit Close for a tab's last pane. To close the entire workspace, use its workspace menu or the workspace-close key binding. Blank rows and dividers do not change focus. Custom socket menu entries follow the same scopes (`sidebar`, `tab`, or `pane`).
+Sidebar context menus follow the clicked row: workspace names and Git branch rows offer workspace actions; the first pane row of each tab in a multi-tab workspace offers tab actions; other pane rows offer pane actions. Closing a tab leaves the workspace and its other tabs intact. The final tab cannot be closed through the tab menu, and pane menus omit Close for a tab's last pane. To close the entire workspace, use its workspace menu or the workspace-close key binding. Blank rows and dividers do not change focus. Custom socket menu entries follow the same scopes (`sidebar`, `tab`, or `pane`). If automation removes a menu or tab-picker target before selection, its stale action is dismissed instead of acting on the newly focused workspace or creating an invisible pane.
 
 ## Remote and container panes
 
@@ -211,6 +214,60 @@ spinner on screen while it is really idle or blocked on a prompt: a matching
 title always outranks the screen scrape. Check what your harness emits with
 `printf '\e]2;...\a'`-style OSC titles before picking a substring.
 
+## Experimental plugins
+
+Plugins are opt-in external processes communicating through bounded NDJSON over stdin/stdout. They can contribute context-menu actions, finder search providers, notifications, footer status, scoped metadata subscriptions, approved pane operations and input, private storage, and separately enabled floating views. Manifests may declare workspace activation markers and typed configuration options. Normal startup runs no plugins. Custom harnesses and holder sessions are unchanged.
+
+**Plugins are trusted executable code, not sandboxed code.** Approving a plugin permits it to run with your OS permissions and inherited environment. Host grants restrict protocol operations only. They cannot prevent a same-user executable from reading accessible files, spawning processes, or using the existing control socket. Inspect packages before approving them.
+
+### Discover and approve
+
+```sh
+hrdx plugins list
+hrdx plugins doctor --json
+hrdx plugins list --state="" --dir ./plugin-packages
+```
+
+Discovery never executes code. The default root is `plugins/` next to the state file, with `plugin.json` in each immediate package directory. Repeatable `--dir PATH` adds roots without precedence. Duplicate IDs invalidate every claimant. There is no automatic project scan, recursive discovery, or download. `--state PATH` selects another configuration location, while `--state=""` disables the default inventory root. `list` returns zero after writing its inventory. `doctor` also checks enabled approvals and returns 1 for problems. Invalid command usage returns 2.
+
+Try the standard-library-only reference plugin from a checkout:
+
+```sh
+go build -o examples/plugins/hello/hello.exe ./examples/plugins/hello
+hrdx plugins approve --package ./examples/plugins/hello --trust --grant ui.action.contribute --grant ui.notification --grant ui.provider.contribute --set greeting=Hi
+hrdx --plugins
+```
+
+Right-click a pane or workspace and select **Hello from plugin**. Open the finder with `ctrl+b /` and type at least two characters to see the example search provider's rows below the ordinary matches. The process starts lazily when invoked, with activation progress in the footer. hrdx rechecks the captured target after activation, so a pane, tab, or workspace closed while the plugin starts is not redirected to another resource. `ctrl+b P` opens plugin lifecycle controls, also available in workspace menus and in a `plugins` settings section that can also disable a plugin. Menus scroll with keyboard selection when their entries exceed the available height.
+
+Manifests can declare activation markers (`.git`, `package.json`) so actions and providers appear only in workspaces containing one of them, and flat typed configuration options set with `--set key=value` at approval time and delivered to the plugin at startup. Configuration is ordinary state, not a secret store. Approval is bound to the canonical package path and a SHA-256 digest of all package files. Changing a binary, manifest, or asset requires explicit reapproval. Runtime packages cannot contain symlinks and are limited to 128 MiB, 1024 entries, and 32 directory levels. Write mutable data outside the package. Grants must be explicitly listed and requested by the manifest. To allow workspace operations, also specify repeatable `--workspace PATH` scopes or explicitly choose `--instance`. Workspace scopes use the exact absolute path spelling shown in hrdx's status, preserving symlinks and case. Without those scopes, no workspace data or pane operations are allowed.
+
+```sh
+hrdx plugins inspect --id example.hello
+hrdx plugins disable --id example.hello
+hrdx plugins enable --id example.hello
+hrdx plugins revoke --id example.hello
+hrdx plugins status
+hrdx plugins start --id example.hello
+hrdx plugins stop --id example.hello
+hrdx plugins restart --id example.hello
+hrdx plugins reload --id example.hello
+```
+
+Management commands accept `--state PATH`. `revoke` removes the approval record but retains separately stored private plugin data. Approvals live in `plugin-approvals/` next to the state file, separate from workspace snapshots. A running instance checks approval changes every 500 ms and revokes changed, removed, or disabled records. New approvals and changed grants require restarting hrdx. `start`, `stop`, `restart`, and `status` use the running instance's control socket and require the API to be enabled. Status includes package path, version, negotiated protocol, requested and granted capabilities, scopes, declared action/view IDs, lifecycle state, generation, and sanitized failure. Package paths and workspace scopes can be sensitive. Lifecycle commands acknowledge acceptance, not successful startup. Check `status` for handshake or launch failures. After changing development package files, run `approve --trust` again and then `reload --id ID`. Reload accepts only a current approval for the same package path, stops the old generation, and revalidates the package before launch. A stopped or crashed plugin never automatically restarts.
+
+### Views, events, and process lifetime
+
+Plugin views additionally require `--plugin-views`, a `ui.view.contribute` grant, and a declared view ID. A view floats over the terminals by default, or docks at the right or bottom edge of the terminal area (at most half of it), in which case the split layout uses the remaining space without changing the saved layout. Focused keyboard/mouse input needs the separate `ui.view.input` grant. Views use bounded plain-text rows rather than raw ANSI. Host borders, clipping, stacking, menus, settings, and footer remain host-owned. Escape or the frame's `x` closes a view, and the normal prefix opens host commands. Views have no PTY, holder session, or persisted layout identity.
+
+To enable the reference plugin's optional panel, reapprove it with `--grant ui.view.contribute --grant ui.view.input` in addition to its action and notification grants, then launch `hrdx --plugins --plugin-views`.
+
+Subscriptions deliver scoped `snapshot.changed` events at most five times per second. Delivery is best effort, changes may be coalesced, and clients recover through a fresh scoped `status` query. Terminal output and ordinary terminal keystrokes are not event streams. Notifications are rate-limited, status keeps the latest value, and stopped sessions lose their contributions and subscriptions.
+
+Plugins stop with the TUI using bounded graceful shutdown and platform-specific process cleanup. Split and tab panes created by approved plugin operations become host-owned and retain normal holder persistence. Floating panes created by a plugin are temporary: they belong to that plugin connection, never enter saved state, and close when the plugin stops, crashes, reloads, or hrdx quits. At most four exist at once. With the separate `pane.send_input` grant a plugin may type into in-scope panes. Pane input, from keyboard, socket, or plugin, is queued in order and written by a background goroutine, so a child that stops reading its PTY cannot freeze the UI. Plugin input is bounded to 16 KiB per call and 256 KiB queued per pane and reports `busy` when a child is stalled. Keyboard input is never dropped. Private storage is kept separately under `plugin-data/`, with per-plugin quotas and cross-process locking. Neither approvals nor plugin data are sandboxed from other same-user processes. Protocol payloads and stderr are not logged.
+
+The [plugin protocol and manifest reference](docs/plugin-platform.md) documents methods, grants, limits, compatibility, and remaining work. The platform is experimental, independently versioned, and does not claim zot wire compatibility.
+
 ## Socket API
 
 While hrdx runs it serves a control API on a unix socket next to the state file (`hrdx.sock`), so scripts, editors, and coding agents can inspect and drive a running session. Disable with `--api=false`.
@@ -248,6 +305,8 @@ echo '{"id": "7", "method": "menu.register", "params": {"target": "pane", "label
 | `pane.close` | Close a pane by id |
 | `menu.register` | Add a process-local context-menu entry (`target`: `pane`, `tab`, `sidebar`; `label`; unique `action_id`) |
 | `events.subscribe` | Keep the connection open and push events |
+| `plugins.status` | Inspect experimental plugin lifecycle states, requires `--plugins` |
+| `plugins.control` | Request `start`, `stop`, `restart`, or explicitly reapproved `reload` for a plugin (`plugin`, `action`), requires `--plugins` |
 
 Successful responses are `{"id": "...", "result": {...}}`; failures are `{"id": "...", "error": {"code": "not_found", "message": "..."}}` with codes `not_found`, `invalid_params`, `unknown_method`, `timeout`, and `error`.
 

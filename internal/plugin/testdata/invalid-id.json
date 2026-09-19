@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "id": "unnamespaced",
+  "version": "1.0.0",
+  "entrypoint": "plugin.exe",
+  "protocol": {"min": 1, "max": 1}
+}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -416,4 +417,97 @@ func stripANSI(value string) string {
 		}
 	}
 	return out.String()
+}
+
+// blockingHost records writes and can stall like a child that stopped
+// reading its PTY.
+type blockingHost struct {
+	mu      sync.Mutex
+	release chan struct{}
+	writes  [][]byte
+	started chan struct{}
+}
+
+func (h *blockingHost) Write(_ int64, data []byte) {
+	h.mu.Lock()
+	first := len(h.writes) == 0
+	h.writes = append(h.writes, append([]byte(nil), data...))
+	h.mu.Unlock()
+	if first {
+		close(h.started)
+		<-h.release
+	}
+}
+func (h *blockingHost) Resize(int64, int, int)  {}
+func (h *blockingHost) Kill(int64)              {}
+func (h *blockingHost) Foreground(int64) string { return "" }
+
+func TestWriteQueuePreservesOrderAndNeverBlocksCaller(t *testing.T) {
+	host := &blockingHost{release: make(chan struct{}), started: make(chan struct{})}
+	pane := NewHolderPane(host, 1, 40, 6)
+	t.Cleanup(pane.MarkExited)
+	done := make(chan struct{})
+	go func() {
+		pane.Write([]byte("a"))
+		<-host.started
+		pane.Write([]byte("b"))
+		if !pane.TryWrite([]byte("c")) {
+			t.Error("bounded write rejected below the limit")
+		}
+		// Keyboard input is never dropped, even past the automation limit.
+		pane.Write(make([]byte, MaxQueuedInput+1))
+		if pane.TryWrite([]byte("d")) {
+			t.Error("automation write accepted while the queue is saturated")
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Write blocked the caller while the child was stalled")
+	}
+	if pane.ScrollOffset() != 0 {
+		t.Fatal("input did not snap to live output")
+	}
+	if !pane.Running() {
+		t.Fatal("pane exited unexpectedly")
+	}
+	close(host.release)
+	deadline := time.After(5 * time.Second)
+	for {
+		host.mu.Lock()
+		count := len(host.writes)
+		host.mu.Unlock()
+		if count == 4 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("queued writes = %d, want 4", count)
+		case <-time.After(time.Millisecond):
+		}
+	}
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	if string(host.writes[0]) != "a" || string(host.writes[1]) != "b" || string(host.writes[2]) != "c" || len(host.writes[3]) != MaxQueuedInput+1 {
+		t.Fatalf("write order broken: %q", host.writes[:3])
+	}
+}
+
+func TestWriteAfterExitIsDiscarded(t *testing.T) {
+	host := &blockingHost{release: make(chan struct{}), started: make(chan struct{})}
+	pane := NewHolderPane(host, 1, 40, 6)
+	pane.MarkExited()
+	pane.Write([]byte("late"))
+	if pane.TryWrite([]byte("late")) {
+		t.Fatal("exited pane accepted automation input")
+	}
+	if pane.QueuedInput() != 0 {
+		t.Fatal("exited pane retained queued input")
+	}
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	if len(host.writes) != 0 {
+		t.Fatal("exited pane forwarded input")
+	}
 }

@@ -73,8 +73,8 @@ func TestRapidWheelInputStopsAtOldestLine(t *testing.T) {
 	if !probe.reachedTop {
 		t.Fatal("test did not reach the oldest line")
 	}
-	if probe.resets != 0 || len(host.input) != 0 {
-		t.Fatalf("upward wheel input reset scrollback %d times and sent %d bytes to child", probe.resets, len(host.input))
+	if probe.resets != 0 || len(host.bytes(probe.model.currentPane().term)) != 0 {
+		t.Fatalf("upward wheel input reset scrollback %d times and sent %d bytes to child", probe.resets, len(host.bytes(probe.model.currentPane().term)))
 	}
 	if got := probe.model.currentPane().term.ScrollOffset(); got != 553 {
 		t.Fatalf("offset=%d, want clamped at 553", got)
@@ -87,15 +87,15 @@ func TestRapidWheelInputPreservesEveryStep(t *testing.T) {
 	if got := probe.model.currentPane().term.ScrollOffset(); got != 3000 {
 		t.Fatalf("offset=%d, want 3000 (all 1000 upward wheel events)", got)
 	}
-	if probe.resets != 0 || len(host.input) != 0 {
-		t.Fatalf("resets=%d, child input bytes=%d", probe.resets, len(host.input))
+	if probe.resets != 0 || len(host.bytes(probe.model.currentPane().term)) != 0 {
+		t.Fatalf("resets=%d, child input bytes=%d", probe.resets, len(host.bytes(probe.model.currentPane().term)))
 	}
 }
 
 func TestRapidWheelInputStillReachesCapturingChild(t *testing.T) {
 	const up = "\x1b[<64;40;5M"
 	const down = "\x1b[<65;40;5M"
-	_, host := runScrollInput(t, 553, true, strings.NewReader(strings.Repeat(up+down, 500)+"\x03"))
+	probe, host := runScrollInput(t, 553, true, strings.NewReader(strings.Repeat(up+down, 500)+"\x03"))
 	// Child coordinates are pane-local, just as for intact MouseMsg input.
 	model := newTestModel(t.TempDir())
 	panes := model.layoutFor(model.currentSpace().tab())
@@ -104,7 +104,7 @@ func TestRapidWheelInputStillReachesCapturingChild(t *testing.T) {
 	y := 4 - 2 - inner.y
 	wantUp := encodeSGRMouse(tea.MouseMsg{Button: tea.MouseButtonWheelUp}, x, y)
 	wantDown := encodeSGRMouse(tea.MouseMsg{Button: tea.MouseButtonWheelDown}, x, y)
-	if want := strings.Repeat(string(wantUp)+string(wantDown), 500); string(host.input) != want {
-		t.Fatalf("child did not receive all 1000 wheel events in order (got %d bytes, want %d)", len(host.input), len(want))
+	if want := strings.Repeat(string(wantUp)+string(wantDown), 500); string(host.bytes(probe.model.currentPane().term)) != want {
+		t.Fatalf("child did not receive all 1000 wheel events in order (got %d bytes, want %d)", len(host.bytes(probe.model.currentPane().term)), len(want))
 	}
 }
