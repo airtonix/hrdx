@@ -157,7 +157,7 @@ func main() {
 	flag.StringVar(&statePath, "state", state.DefaultPath(), "state file for workspace persistence (empty disables)")
 	flag.BoolVar(&resume, "continue", false, "resume each agent's latest session")
 	flag.BoolVar(&fresh, "fresh", false, "ignore saved workspaces and start clean")
-	flag.BoolVar(&apiOn, "api", true, "serve the control API on a unix socket next to the state file")
+	flag.BoolVar(&apiOn, "api", true, "serve the control API on a unix socket (state directory, or XDG_RUNTIME_DIR fallback)")
 	flag.BoolVar(&persistOn, "persist", true, "keep pane processes alive across restarts via the session holder")
 	flag.BoolVar(&pluginsOn, "plugins", false, "enable the experimental runtime for explicitly approved plugins")
 	flag.BoolVar(&pluginViews, "plugin-views", false, "allow approved floating plugin views (requires --plugins)")
@@ -234,12 +234,18 @@ func main() {
 		modelUI.SetPlugins(plugins)
 	}
 
+	// Use the legacy socket directory when it supports Unix sockets so live
+	// holders and existing API clients keep working across upgrades.
+	sockets := legacySocketPaths(statePath)
+	if statePath != "" && (persistOn || apiOn) {
+		sockets = selectSocketPaths(statePath, runtime.GOOS, os.Getenv("XDG_RUNTIME_DIR"), probeUnixSocket)
+	}
+
 	// Session holder: pane processes live in a small background process
 	// and survive TUI restarts. Attach to a running holder or spawn one.
 	var holderClient *holder.Client
 	if persistOn && statePath != "" {
-		holderSocket := filepath.Join(filepath.Dir(statePath), "holder.sock")
-		client, err := holder.ConnectOrSpawn(holderSocket, resolvedVersion())
+		client, err := holder.ConnectOrSpawn(sockets.holder, resolvedVersion())
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "hrdx: session holder unavailable, panes will not persist:", err)
 		} else {
@@ -261,8 +267,7 @@ func main() {
 	resizeStopped := watchPlatformResize(program, stopResize)
 
 	if apiOn && statePath != "" {
-		socket := filepath.Join(filepath.Dir(statePath), "hrdx.sock")
-		server, err := ui.StartAPIServer(socket, func(request api.Request) {
+		server, err := ui.StartAPIServer(sockets.api, func(request api.Request) {
 			program.Send(request)
 		}, events)
 		if err != nil {

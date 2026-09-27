@@ -2,11 +2,41 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/patriceckhart/hrdx/internal/api"
 )
+
+func TestPluginCLIRuntimeFallback(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("XDG_RUNTIME_DIR is not used on Windows")
+	}
+	runtimeDir, err := os.MkdirTemp(os.TempDir(), "hr-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(runtimeDir) })
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	paths, err := runtimeSocketPaths(statePath, runtime.GOOS, runtimeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := api.NewServer(paths.api, func(request api.Request) {
+		request.Reply <- api.Reply{Data: map[string]bool{"accepted": true}}
+	}, nil)
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(server.Close)
+	var stdout, stderr bytes.Buffer
+	if code := runPlugins([]string{"status", "--state", statePath}, &stdout, &stderr); code != 0 {
+		t.Fatalf("runtime fallback: code=%d output=%s errors=%s", code, &stdout, &stderr)
+	}
+}
 
 func TestPluginCLI(t *testing.T) {
 	base := t.TempDir()

@@ -272,13 +272,17 @@ The [plugin protocol and manifest reference](docs/plugin-platform.md) documents 
 
 ## Socket API
 
-While hrdx runs it serves a control API on a unix socket next to the state file (`hrdx.sock`), so scripts, editors, and coding agents can inspect and drive a running session. Disable with `--api=false`.
+While hrdx runs it serves a control API on a Unix socket next to the state file (`hrdx.sock`), so scripts, editors, and coding agents can inspect and drive a running session. Disable with `--api=false`. The session holder uses `holder.sock` in the same directory.
+
+On macOS and Linux, if the state directory cannot create Unix sockets and `XDG_RUNTIME_DIR` is an absolute, usable directory, sockets fall back to a private `hrdx/` directory under `XDG_RUNTIME_DIR`. The names are `hrdx-<id>.sock` and `holder-<id>.sock`, where `<id>` is the first 16 hex digits of the SHA-256 hash of the absolute state-file path. Different `--state` files therefore get different runtime sockets. Existing socket paths remain the default whenever they work, and an existing live holder is reused even if the API must move. `hrdx plugins` control commands try the legacy API socket first, then the runtime socket. Runtime sockets last only as long as `XDG_RUNTIME_DIR`, which may be cleared at logout. Native Windows keeps its existing socket paths; WSL uses its own runtime and socket namespace.
 
 The protocol is newline-delimited JSON: send one request per line, receive one response line with the same `id`.
 
 ```sh
 SOCK="$HOME/Library/Application Support/hrdx/hrdx.sock"   # macOS default
 # SOCK="$XDG_CONFIG_HOME/hrdx/hrdx.sock"                  # Linux, or macOS with XDG_CONFIG_HOME set
+# If the state directory cannot host sockets, use $XDG_RUNTIME_DIR/hrdx/hrdx-<id>.sock
+# on macOS or Linux, with <id> computed from the absolute state-file path as above.
 # hrdx.sock is a native Windows AF_UNIX socket too (%AppData%\hrdx\hrdx.sock).
 # WSL has a separate socket namespace and cannot connect to it directly; Git
 # Bash does not ship a compatible `nc -U`. Use a native Windows client, such
