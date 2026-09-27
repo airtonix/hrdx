@@ -89,7 +89,7 @@ All keys go to the focused terminal, except the `ctrl+b` prefix (tmux style):
 | `n` or `p` | Next / previous tab |
 | `]` or `[` | Next / previous workspace |
 | `tab` or `shift+tab` | Next / previous pane; stays in prefix mode for repeated jumps, `esc` exits |
-| `/` | Fuzzy finder over every workspace, tab, and pane: type to filter, arrows select, enter jumps |
+| `/` | Fuzzy finder over groups, workspaces, tabs, and panes: type to filter, arrows select, enter jumps |
 | `b` | Collapse or expand the workspace sidebar |
 | `P` | Open experimental plugin lifecycle controls |
 | `r` | Rename the focused pane |
@@ -230,7 +230,7 @@ Groups are optional organisational labels, independent of directories, branches,
 
 `group.list` returns `{"type":"groups","groups":[{"group_path":["game"]},{"group_path":["game","reviews"]},{"group_path":["game","reviews","ready"]}]}` inside the usual `result`. Paths are unique, in first-workspace order, ancestors before descendants. Status keeps the existing flat `workspaces` array and adds optional `group_path`; branch information stays in `branch`. Workspace created, closed, and moved events carry group metadata (omitted for standalone workspaces). Moving replies with `workspace`, `path`, and optional `group_path`. Events remain best-effort; query status or group.list to recover. Separate group lifecycle events are not emitted.
 
-The sidebar adds plain nested headings while keeping the existing workspace, branch, tab and pane rows. Headings do not select, close, or drag anything. Groups and their children follow first-workspace order; dragging a workspace still reorders the underlying workspace list, not its membership. Keyboard workspace cycling and flat status retain that list order. Deep indentation is capped to keep labels visible in narrow or compact sidebars. The selection rail stays at the left edge; only row content is indented. Group placement is RPC/plugin-only; existing keys and context menus are unchanged.
+The sidebar adds plain nested headings while keeping the existing workspace, branch, tab and pane rows. Headings do not select, close, or drag anything. Groups and their children follow first-workspace order; dragging a workspace still reorders the underlying workspace list, not its membership. Keyboard workspace cycling and flat status retain that list order. Deep indentation is capped to keep labels visible in narrow or compact sidebars. The selection rail stays at the left edge; only row content is indented. Group placement is RPC/plugin-only; existing keys and context menus are unchanged. The fuzzy finder includes group paths in pane labels and matches group names, so identically named workspaces in different groups remain distinguishable.
 
 Groups persist with the workspace. Old state and clients without group fields remain standalone, and an invalid saved group path falls back to standalone without discarding panes. Moving never recreates a tab, pane, holder session, or split layout.
 
