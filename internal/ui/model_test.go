@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/patriceckhart/hrdx/internal/holder"
 	"github.com/patriceckhart/hrdx/internal/state"
 	"github.com/patriceckhart/hrdx/internal/term"
@@ -312,8 +313,12 @@ func TestFooterNewSpacePromptShowsFullHint(t *testing.T) {
 	}
 
 	footer := model.renderFooter()
-	if !strings.Contains(footer, "directory (tab completes)") {
+	plain := ansi.Strip(footer)
+	if !strings.Contains(plain, "directory (tab completes)") {
 		t.Fatalf("footer = %q, want the full directory hint", footer)
+	}
+	if !strings.HasPrefix(plain, " NEW WORKSPACE  directory") {
+		t.Fatalf("footer = %q, want the hint to start at the cursor cell", footer)
 	}
 	if strings.Contains(footer, "\n") {
 		t.Fatalf("footer wrapped: %q", footer)
@@ -342,8 +347,8 @@ func TestFooterRenamePromptShowsFullHint(t *testing.T) {
 
 	updated, _ := model.openRenameInput(target)
 	model = updated.(Model)
-	if footer := model.renderFooter(); !strings.Contains(footer, "pane name") {
-		t.Fatalf("footer = %q, want the full pane name hint", footer)
+	if footer := model.renderFooter(); !strings.HasPrefix(ansi.Strip(footer), " RENAME  pane name") {
+		t.Fatalf("footer = %q, want the pane name hint at the cursor cell", footer)
 	}
 }
 

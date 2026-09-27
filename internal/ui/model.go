@@ -3043,20 +3043,18 @@ func (m Model) renderFooter() string {
 	return badge + body + styleBar.Render(strings.Repeat(" ", max(0, gap))) + right
 }
 
-// renderPromptInput renders the shared prompt input for the footer, followed
-// by the input's placeholder as a muted hint while the field is empty. The
-// hint is drawn here instead of leaving it to the textinput: bubbles sizes a
-// placeholder to Width+1 runes, and hrdx leaves Width unset so the value is
-// never scrolled, so the input would render only the placeholder's first cell.
+// renderPromptInput keeps the first placeholder cell under the input cursor.
+// Bubbles renders only that cell when Width is unset, so draw the remainder
+// in the footer without enabling horizontal scrolling of the input value.
 func (m Model) renderPromptInput() string {
 	input := m.input
-	hint := input.Placeholder
-	input.Placeholder = ""
-	body := styleBarText.Render(" " + input.View())
-	if input.Value() == "" && hint != "" {
-		body += styleBarMuted.Render(hint)
+	if input.Value() == "" && input.Placeholder != "" {
+		hint := []rune(input.Placeholder)
+		input.Placeholder = string(hint[0])
+		input.PlaceholderStyle = styleBarMuted
+		return styleBarText.Render(" "+input.View()) + styleBarMuted.Render(string(hint[1:]))
 	}
-	return body
+	return styleBarText.Render(" " + input.View())
 }
 
 func (m Model) navigationHint() string {
