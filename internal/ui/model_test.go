@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/patriceckhart/hrdx/internal/holder"
 	"github.com/patriceckhart/hrdx/internal/state"
 	"github.com/patriceckhart/hrdx/internal/term"
@@ -297,6 +298,57 @@ func TestFooterInputDoesNotWrapOnNarrowWindow(t *testing.T) {
 	}
 	if strings.Contains(footer, "agent") {
 		t.Fatalf("footer should hide summary before wrapping: %q", footer)
+	}
+}
+
+func TestFooterNewSpacePromptShowsFullHint(t *testing.T) {
+	model := newTestModel("/tmp/api")
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlB})
+	model = updated.(Model)
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	model = updated.(Model)
+	if model.mode != modeNewSpace {
+		t.Fatalf("mode = %d, want modeNewSpace after ctrl+b w", model.mode)
+	}
+
+	footer := model.renderFooter()
+	plain := ansi.Strip(footer)
+	if !strings.Contains(plain, "directory (tab completes)") {
+		t.Fatalf("footer = %q, want the full directory hint", footer)
+	}
+	if !strings.HasPrefix(plain, " NEW WORKSPACE  directory") {
+		t.Fatalf("footer = %q, want the hint to start at the cursor cell", footer)
+	}
+	if strings.Contains(footer, "\n") {
+		t.Fatalf("footer wrapped: %q", footer)
+	}
+
+	// A narrow bar clips the hint instead of wrapping the footer.
+	model.width = 30
+	narrow := model.renderFooter()
+	if strings.Contains(narrow, "\n") || lipgloss.Width(narrow) != model.width {
+		t.Fatalf("narrow footer = %q, want one clipped row", narrow)
+	}
+	model.width = 120
+
+	// The hint gives way to the typed path.
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("~/ap")})
+	model = updated.(Model)
+	if footer = model.renderFooter(); strings.Contains(footer, "directory") || !strings.Contains(footer, "~/ap") {
+		t.Fatalf("footer after typing = %q, want the value without the hint", footer)
+	}
+}
+
+func TestFooterRenamePromptShowsFullHint(t *testing.T) {
+	model := newTestModel("/tmp/api")
+	target := model.currentPane()
+	target.name = ""
+
+	updated, _ := model.openRenameInput(target)
+	model = updated.(Model)
+	if footer := model.renderFooter(); !strings.HasPrefix(ansi.Strip(footer), " RENAME  pane name") {
+		t.Fatalf("footer = %q, want the pane name hint at the cursor cell", footer)
 	}
 }
 

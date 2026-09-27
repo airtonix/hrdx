@@ -2963,7 +2963,7 @@ func (m Model) renderFooter() string {
 	switch m.mode {
 	case modeNewSpace:
 		badge = styleBadgeInput.Render(" NEW WORKSPACE ")
-		body = styleBarText.Render(" " + m.input.View())
+		body = m.renderPromptInput()
 		if len(m.completions) > 0 {
 			var hints []string
 			for index, candidate := range m.completions {
@@ -2978,7 +2978,7 @@ func (m Model) renderFooter() string {
 		}
 	case modeRename:
 		badge = styleBadgeInput.Render(" RENAME ")
-		body = styleBarText.Render(" " + m.input.View())
+		body = m.renderPromptInput()
 	case modePluginView:
 		badge = styleBadgeInput.Render(" PLUGIN ")
 		body = styleBarMuted.Render(" esc closes view, " + m.prefixTrigger + " opens host commands")
@@ -3041,6 +3041,20 @@ func (m Model) renderFooter() string {
 	}
 	gap := m.width - badgeWidth - lipgloss.Width(body) - lipgloss.Width(right)
 	return badge + body + styleBar.Render(strings.Repeat(" ", max(0, gap))) + right
+}
+
+// renderPromptInput keeps the first placeholder cell under the input cursor.
+// Bubbles renders only that cell when Width is unset, so draw the remainder
+// in the footer without enabling horizontal scrolling of the input value.
+func (m Model) renderPromptInput() string {
+	input := m.input
+	if input.Value() == "" && input.Placeholder != "" {
+		hint := []rune(input.Placeholder)
+		input.Placeholder = string(hint[0])
+		input.PlaceholderStyle = styleBarMuted
+		return styleBarText.Render(" "+input.View()) + styleBarMuted.Render(string(hint[1:]))
+	}
+	return styleBarText.Render(" " + input.View())
 }
 
 func (m Model) navigationHint() string {
