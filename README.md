@@ -73,6 +73,8 @@ hrdx --agent claude
 
 A native Windows `hrdx.exe` launched from Git Bash ignores an MSYS-only `SHELL` value such as `/usr/bin/bash`, which Windows cannot resolve, and falls back to `%COMSPEC%`. To use Git Bash for panes, pass a native path explicitly, for example `hrdx --shell "C:/Program Files/Git/bin/bash.exe"`.
 
+On Windows, hrdx reads VT input from the console so bracketed multi-line paste reaches an agent pane as one paste instead of separate Enter presses. This requires a terminal that supports bracketed paste, such as Windows Terminal. Console size changes are detected by polling, so pane resizing may lag by up to 100 ms.
+
 ## Keys
 
 All keys go to the focused terminal, except the `ctrl+b` prefix (tmux style):
@@ -292,13 +294,17 @@ The [plugin protocol and manifest reference](docs/plugin-platform.md) documents 
 
 ## Socket API
 
-While hrdx runs it serves a control API on a unix socket next to the state file (`hrdx.sock`), so scripts, editors, and coding agents can inspect and drive a running session. Disable with `--api=false`.
+While hrdx runs it serves a control API on a Unix socket next to the state file (`hrdx.sock`), so scripts, editors, and coding agents can inspect and drive a running session. Disable with `--api=false`. The session holder uses `holder.sock` in the same directory.
+
+On macOS and Linux, if the state directory cannot create Unix sockets and `XDG_RUNTIME_DIR` is an absolute, usable directory, sockets fall back to a private `hrdx/` directory under `XDG_RUNTIME_DIR`. The names are `hrdx-<id>.sock` and `holder-<id>.sock`, where `<id>` is the first 16 hex digits of the SHA-256 hash of the absolute state-file path. Different `--state` files therefore get different runtime sockets. Existing socket paths remain the default whenever they work, and an existing live holder is reused even if the API must move. `hrdx plugins` control commands try the legacy API socket first, then the runtime socket. Runtime sockets last only as long as `XDG_RUNTIME_DIR`, which may be cleared at logout. Native Windows keeps its existing socket paths; WSL uses its own runtime and socket namespace.
 
 The protocol is newline-delimited JSON: send one request per line, receive one response line with the same `id`.
 
 ```sh
 SOCK="$HOME/Library/Application Support/hrdx/hrdx.sock"   # macOS default
 # SOCK="$XDG_CONFIG_HOME/hrdx/hrdx.sock"                  # Linux, or macOS with XDG_CONFIG_HOME set
+# If the state directory cannot host sockets, use $XDG_RUNTIME_DIR/hrdx/hrdx-<id>.sock
+# on macOS or Linux, with <id> computed from the absolute state-file path as above.
 # hrdx.sock is a native Windows AF_UNIX socket too (%AppData%\hrdx\hrdx.sock).
 # WSL has a separate socket namespace and cannot connect to it directly; Git
 # Bash does not ship a compatible `nc -U`. Use a native Windows client, such
@@ -377,7 +383,7 @@ See `examples/themes/` for a full example.
 
 ## Notifications
 
-The notification section of the settings window has two independent toggles for finished agent turns: play a sound (built-in `ding` and `chime`, or your own audio files) and a system notification, which rings the terminal bell so your platform's native attention indicator fires: dock badge and bounce on macOS, the window manager's urgency hint on Linux, the taskbar/window attention flash on Windows Terminal (depends on its `bellStyle` setting). No notification daemon or permission required. Add custom sounds with a `sounds.json` next to the state file; they appear as choices and are previewed when selected:
+The notification section of the settings window has two independent toggles for finished agent turns: play a sound (built-in `ding` and `chime`, or your own audio files) and a system notification, which rings the terminal bell so your platform's native attention indicator fires: dock badge and bounce on macOS, the window manager's urgency hint on Linux, the taskbar/window attention flash on Windows Terminal (depends on its `bellStyle` setting). No notification daemon or permission required. Because it is the terminal bell, your terminal may also play its own alert sound for it even with hrdx's sound toggle off. To get the badge without any audio, set the terminal's bell to visual or silent (Terminal.app: Settings, Profiles, Advanced, uncheck Audible bell; iTerm2: Profiles, Terminal, Silence bell; Ghostty: `bell-features`; Windows Terminal: `bellStyle`). Add custom sounds with a `sounds.json` next to the state file; they appear as choices and are previewed when selected:
 
 ```json
 [
